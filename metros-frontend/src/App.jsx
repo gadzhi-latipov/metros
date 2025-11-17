@@ -253,16 +253,17 @@ useEffect(() => {
     loadRequests(true);
   }
 }, [currentScreen, currentGroup]);
-  const handleEnterWaitingRoom = async () => {
+  
+
+
+
+
+
+
+const handleEnterWaitingRoom = async () => {
    
 
-// Тестовый запрос
-try {
-  const testResponse = await fetch(`${api.API_BASE}/health`);
-  console.log('🏥 Health check статус:', testResponse.status);
-} catch (error) {
-  console.error('❌ Нет подключения к бэкенду:', error);
-}
+
   console.log('🔍 Проверка переменных:');
 console.log('- currentScreen переменная:', currentScreen);
 console.log('- setCurrentScreen функция:', typeof setCurrentScreen);
@@ -630,56 +631,74 @@ const updateUserState = async () => {
   };
 
   // Рендер карты станций
-  const renderStationsMap = () => {
-    if (!stationsData.stationStats) return <div className="loading">Загрузка карты станций...</div>;
+const renderStationsMap = () => {
+  console.log('🔍 renderStationsMap вызван:', {
+    stationsData,
+    hasStationStats: !!stationsData.stationStats,
+    stationStats: stationsData.stationStats,
+    selectedCity,
+    allStations: helpers.stations[selectedCity]
+  });
+  
+  if (!stationsData.stationStats) {
+    console.log('❌ Нет stationStats данных');
+    return <div className="loading">Загрузка карты станций...</div>;
+  }
+  
+  const allStations = helpers.stations[selectedCity];
+  const stationsMap = {};
+  
+  // Создаем карту станций для быстрого доступа
+  stationsData.stationStats.forEach(station => {
+    stationsMap[station.station] = station;
+    console.log(`📊 Станция в данных: ${station.station}`, station);
+  });
+  
+  console.log('🔍 Все станции в городе:', allStations);
+  console.log('🔍 Карта станций:', stationsMap);
+  
+  return allStations.map(stationName => {
+    const stationData = stationsMap[stationName];
+    let userCount = 0;
+    let waitingCount = 0;
+    let connectedCount = 0;
+    let stationClass = 'empty';
     
-    const allStations = helpers.stations[selectedCity];
-    const stationsMap = {};
+    console.log(`🔍 Обработка станции ${stationName}:`, stationData);
     
-    stationsData.stationStats.forEach(station => {
-      stationsMap[station.station] = station;
-    });
-    
-    return allStations.map(stationName => {
-      const stationData = stationsMap[stationName];
-      let userCount = 0;
-      let waitingCount = 0;
-      let connectedCount = 0;
-      let stationClass = 'empty';
+    if (stationData) {
+      userCount = stationData.totalUsers || 0;
+      waitingCount = stationData.waiting || 0;
+      connectedCount = stationData.connected || 0;
       
-      if (stationData) {
-        userCount = stationData.totalUsers || 0;
-        waitingCount = stationData.waiting;
-        connectedCount = stationData.connected;
-        
-        if (connectedCount > 0) {
-          stationClass = 'connected';
-        } else if (waitingCount > 0) {
-          stationClass = 'waiting';
-        }
+      if (connectedCount > 0) {
+        stationClass = 'connected';
+      } else if (waitingCount > 0) {
+        stationClass = 'waiting';
       }
-      
-      const isSelected = currentSelectedStation === stationName;
-      
-      return (
-        <div 
-          key={stationName}
-          className={`station-map-item ${stationClass} ${isSelected ? 'selected' : ''}`}
-          onClick={() => handleStationSelect(stationName)}
-        >
-          <div className="station-name">{stationName}</div>
-          {userCount > 0 ? (
-            <div className="station-counts">
-              {waitingCount > 0 && <span className="station-count count-waiting">{waitingCount}⏳</span>}
-              {connectedCount > 0 && <span className="station-count count-connected">{connectedCount}✅</span>}
-            </div>
-          ) : (
-            <div style={{fontSize: '10px', color: '#666'}}>Пусто</div>
-          )}
-        </div>
-      );
-    });
-  };
+    }
+    
+    const isSelected = currentSelectedStation === stationName;
+    
+    return (
+      <div 
+        key={stationName}
+        className={`station-map-item ${stationClass} ${isSelected ? 'selected' : ''}`}
+        onClick={() => handleStationSelect(stationName)}
+      >
+        <div className="station-name">{stationName}</div>
+        {userCount > 0 ? (
+          <div className="station-counts">
+            {waitingCount > 0 && <span className="station-count count-waiting">{waitingCount}⏳</span>}
+            {connectedCount > 0 && <span className="station-count count-connected">{connectedCount}✅</span>}
+          </div>
+        ) : (
+          <div style={{fontSize: '10px', color: '#666'}}>Пусто</div>
+        )}
+      </div>
+    );
+  });
+};
 
   // Рендер участников группы
   const renderGroupMembers = () => {

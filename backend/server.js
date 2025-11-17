@@ -64,15 +64,39 @@ app.get('/api/stations/waiting-room', (req, res) => {
   const city = req.query.city || 'spb';
   console.log('📥 GET /api/stations/waiting-room', { city });
   
+  // Все станции для выбранного города
+  const allStations = city === 'moscow' ? [
+    'Авиамоторная', 'Автозаводская', 'Академическая', 'Александровский сад', 'Алексеевская',
+    'Алтуфьево', 'Аннино', 'Арбатская', 'Аэропорт', 'Бабушкинская'
+  ] : [
+    'Адмиралтейская', 'Балтийская', 'Василеостровская', 'Владимирская', 'Гостиный двор',
+    'Горьковская', 'Достоевская', 'Елизаровская', 'Звенигородская', 'Кировский завод'
+  ];
+  
+  // Создаем статистику для ВСЕХ станций
+  const stationStats = allStations.map(station => {
+    // Подсчитываем реальных пользователей на каждой станции
+    const stationUsers = mockUsers.filter(user => user.station === station);
+    const waiting = stationUsers.filter(user => user.isWaiting).length;
+    const connected = stationUsers.filter(user => user.isConnected).length;
+    
+    return {
+      station,
+      waiting,
+      connected,
+      totalUsers: stationUsers.length
+    };
+  });
+  
+  const total_waiting = stationStats.reduce((sum, stat) => sum + stat.waiting, 0);
+  const total_connected = stationStats.reduce((sum, stat) => sum + stat.connected, 0);
+  
   res.json({
-    stationStats: [
-      { station: 'Площадь Восстания', waiting: 2, connected: 1, totalUsers: 3 },
-      { station: 'Владимирская', waiting: 1, connected: 0, totalUsers: 1 }
-    ],
+    stationStats,
     totalStats: {
-      total_waiting: 4,
-      total_connected: 5, 
-      total_users: 9
+      total_waiting,
+      total_connected, 
+      total_users: total_waiting + total_connected
     }
   });
 });
