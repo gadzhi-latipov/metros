@@ -10,8 +10,9 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://metro-backend-xlkt.onrender.com',
-        changeOrigin: true
+        target: import.meta.env.VITE_API_BASE_URL || 'https://metro-backend-xlkt.onrender.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, '/api')
       }
     }
   }

@@ -4,6 +4,9 @@ import { useState, useEffect, useRef } from 'react';
 import bridge from '@vkontakte/vk-bridge';
 import './App.css';
 import { api, helpers } from './services/api';
+import { TimerComponent } from './TimerComponent';
+
+
 
 export const App = () => {
   const [fetchedUser, setUser] = useState();
@@ -31,8 +34,7 @@ export const App = () => {
   const CACHE_DURATION = 10000;
   const PING_INTERVAL = 15000;
 
-  const timerIntervalRef = useRef(null);
-  const timerSecondsRef = useRef(0);
+
   const userIdRef = useRef(null);
   const globalRefreshIntervalRef = useRef(null);
 
@@ -325,45 +327,6 @@ export const App = () => {
     setSelectedMood('');
   };
 
-  // Таймер функции - УПРОЩЕННАЯ ВЕРСИЯ
-  const startTimer = () => {
-    console.log('🟢 startTimer вызван');
-    
-    if (timerIntervalRef.current) {
-      console.log('⏹️ Таймер уже запущен');
-      return;
-    }
-    
-    timerSecondsRef.current = selectedMinutes * 60;
-    setTimerActive(true);
-    
-    timerIntervalRef.current = setInterval(() => {
-      timerSecondsRef.current--;
-      
-      if (timerSecondsRef.current <= 0) {
-        stopTimer();
-        bridge.send("VKWebAppShowSnackbar", {
-          text: 'Время ожидания истекло!'
-        });
-      }
-    }, 1000);
-    
-    console.log('✅ Таймер запущен');
-  };
-
-  const stopTimer = () => {
-    console.log('🔴 stopTimer вызван');
-    
-    if (timerIntervalRef.current) {
-      clearInterval(timerIntervalRef.current);
-      timerIntervalRef.current = null;
-    }
-    
-    timerSecondsRef.current = 0;
-    setTimerActive(false);
-    
-    console.log('✅ Таймер остановлен');
-  };
 
   const generateUserStatus = () => {
     const positionPart = selectedPosition ? selectedPosition : '';
@@ -729,61 +692,17 @@ export const App = () => {
                   />
                 </div>
                 
-                <div className="compact-timer" id="waiting-room-timer">
-                  <div className="timer-header">
-                    <div className="timer-title">⏰ Таймер ожидания</div>
-                    <div className="timer-status">
-                      {timerActive ? 'Активен' : 'Не активен'}
-                    </div>
-                  </div>
-                  <div className="timer-expanded">
-                    <p>Выберите время ожидания на станции</p>
-                    <div className="timer-options">
-                      <button 
-                        type="button" 
-                        className={`btn timer-option ${selectedMinutes === 5 ? 'active' : ''}`}
-                        onClick={() => handleTimerSelect(5)}
-                      >
-                        5 минут
-                      </button>
-                      <button 
-                        type="button" 
-                        className={`btn timer-option ${selectedMinutes === 10 ? 'active' : ''}`}
-                        onClick={() => handleTimerSelect(10)}
-                      >
-                        10 минут
-                      </button>
-                      <button 
-                        type="button" 
-                        className={`btn timer-option ${selectedMinutes === 15 ? 'active' : ''}`}
-                        onClick={() => handleTimerSelect(15)}
-                      >
-                        15 минут
-                      </button>
-                    </div>
-                    <div className="timer-display">
-                      {timerActive ? `Таймер запущен: ${selectedMinutes} мин` : 'Не запущен'}
-                    </div>
-                    <div className="timer-controls">
-                      <button 
-                        type="button" 
-                        className="btn btn-success" 
-                        onClick={startTimer}
-                        disabled={timerActive}
-                      >
-                        Запустить таймер
-                      </button>
-                      <button 
-                        type="button" 
-                        className="btn btn-secondary" 
-                        onClick={stopTimer}
-                        disabled={!timerActive}
-                      >
-                        Остановить
-                      </button>
-                    </div>
-                  </div>
-                </div>
+               
+                            <TimerComponent 
+                              selectedMinutes={selectedMinutes}
+                              onTimerSelect={handleTimerSelect}
+                              userId={userIdRef.current}
+                              onStatusUpdate={async (data) => {
+                                if (userIdRef.current) {
+                                  await api.updateUser(userIdRef.current, data);
+                                }
+                              }}
+                            />
                 
                 <button 
                   className="btn btn-success" 

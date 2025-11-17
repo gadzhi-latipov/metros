@@ -1,7 +1,13 @@
 // Временный мок API для разработки
 let useMockData = false; // переключите на false когда CORS заработает
 
-const BASE_URL = 'https://metro-backend-xlkt.onrender.com/api';
+// Используем переменные окружения
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://metro-backend-xlkt.onrender.com/api';
+
+// Временный мок API для разработки
+let useMockData = false;
+
+console.log('🌐 API Base URL:', BASE_URL);
 
 
 
