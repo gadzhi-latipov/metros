@@ -1,13 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
 import bridge from '@vkontakte/vk-bridge';
 import { helpers } from './services/api';
-
 export const TimerComponent = ({ 
   selectedMinutes, 
   onTimerSelect, 
   userId,
   onStatusUpdate 
 }) => {
+  console.log('🎯 TimerComponent загружен!', { selectedMinutes, userId });
+
+  const testClick = () => {
+    console.log('✅ Тестовая кнопка работает!');
+  };
 
   // 🔧 ДИАГНОСТИКА - добавьте этот console.log
   console.log('🔧 TimerComponent рендерится:', { 
@@ -130,6 +134,18 @@ export const TimerComponent = ({
 
   return (
     <div className="compact-timer" id="waiting-room-timer">
+        {/* Добавьте тестовую кнопку */}
+      <button 
+        onClick={testClick}
+        style={{
+          background: 'red',
+          color: 'white', 
+          padding: '10px',
+          margin: '10px 0'
+        }}
+      >
+        ТЕСТ: Нажми меня и посмотри в консоль
+      </button>
       <div className="timer-header">
         <div className="timer-title">⏰ Таймер ожидания</div>
         <div className="timer-status">
