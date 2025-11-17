@@ -692,8 +692,10 @@ export const App = () => {
                   />
                 </div>
                 
-               
-                            <TimerComponent 
+               console.log('🔄 App.jsx - перед рендером TimerComponent');
+                console.log('TimerComponent import:', TimerComponent);
+                            {/* <TimerComponent 
+                            
                               selectedMinutes={selectedMinutes}
                               onTimerSelect={handleTimerSelect}
                               userId={userIdRef.current}
@@ -702,8 +704,19 @@ export const App = () => {
                                   await api.updateUser(userIdRef.current, data);
                                 }
                               }}
-                            />
-                
+                            // /> */}
+                                          <div style={{
+                            background: 'red', 
+                            color: 'white', 
+                            padding: '20px',
+                            margin: '10px 0',
+                            border: '2px solid darkred'
+                          }}>
+                            🔴 ТЕСТ: Этот блок виден? Если да - проблема в TimerComponent
+                            <button onClick={() => console.log('Тестовая кнопка нажата!')}>
+                              Нажми меня и посмотри в консоль
+                            </button>
+                          </div>
                 <button 
                   className="btn btn-success" 
                   onClick={handleConfirmStation}
