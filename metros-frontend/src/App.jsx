@@ -3,9 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import bridge from '@vkontakte/vk-bridge';
 import './App.css';
-
 import { api, helpers } from './services/api';
-
 
 export const App = () => {
   const [fetchedUser, setUser] = useState();
@@ -30,8 +28,8 @@ export const App = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   
-  const CACHE_DURATION = 10000; // 10 секунд
-  const PING_INTERVAL = 15000; // 15 секунд
+  const CACHE_DURATION = 10000;
+  const PING_INTERVAL = 15000;
 
   const timerIntervalRef = useRef(null);
   const timerSecondsRef = useRef(0);
@@ -68,7 +66,6 @@ export const App = () => {
   useEffect(() => {
     console.log('🚀 App запущен, инициализируем VK Bridge...');
 
-    // Инициализация VK Bridge согласно документации - должно быть в начале
     bridge.send("VKWebAppInit")
       .then((data) => {
         if (data.result) {
@@ -81,7 +78,6 @@ export const App = () => {
         console.error('❌ Ошибка инициализации VK Bridge:', error);
       });
 
-    // Подписка на события VK Bridge
     bridge.subscribe((event) => {
       if (!event.detail) return;
       
@@ -95,30 +91,19 @@ export const App = () => {
           document.body.attributes.setNamedItem(schemeAttribute);
           break;
         case 'VKWebAppViewHide':
-          console.log('📱 Приложение перешло в фоновый режим');
           setAppState('background');
           break;
         case 'VKWebAppViewRestore':
-          console.log('📱 Приложение восстановлено из фонового режима');
           setAppState('active');
-          break;
-        case 'VKWebAppInitResult':
-          console.log('✅ VKWebAppInit успешно выполнен');
-          break;
-        case 'VKWebAppInitFailed':
-          console.error('❌ VKWebAppInit завершился ошибкой:', data);
           break;
         default:
           break;
       }
     });
 
-    // Получение данных пользователя
     async function fetchUserData() {
       try {
-        console.log('👤 Загружаем данные пользователя...');
         const user = await bridge.send('VKWebAppGetUserInfo');
-        console.log('✅ Данные пользователя получены:', user);
         setUser(user);
       } catch (error) {
         console.error('❌ Ошибка загрузки пользователя:', error);
@@ -142,29 +127,20 @@ export const App = () => {
     };
   }, []);
 
+  useEffect(() => {
+    console.log('🔄 currentScreen ИЗМЕНИЛСЯ:', currentScreen);
+  }, [currentScreen]);
 
-  // Добавь этот useEffect после твоих существующих useEffect
-useEffect(() => {
-  console.log('🔄 currentScreen ИЗМЕНИЛСЯ:', currentScreen);
-}, 
-[currentScreen]);
-
-  // Глобальное обновление 
   const startGlobalRefresh = () => {
     const interval = setInterval(async () => {
       try {
-        console.log('🔄 Глобальное обновление данных...');
-        
-        // Стратегия обновления в зависимости от активного экрана
         if (currentScreen === 'waiting') {
           await loadStationsMap();
           await loadRequests();
-          restoreSelectedStation();
         } else if (currentScreen === 'joined') {
           await loadGroupMembers();
           await loadRequests();
         }
-        
         await improvedPingActivity();
       } catch (error) {
         console.error('❌ Ошибка глобального обновления:', error);
@@ -175,57 +151,35 @@ useEffect(() => {
     return () => clearInterval(interval);
   };
 
-  const stopGlobalRefresh = () => {
-    if (globalRefreshIntervalRef.current) {
-      clearInterval(globalRefreshIntervalRef.current);
-      globalRefreshIntervalRef.current = null;
+  const loadStationsMap = async () => {
+    try {
+      const data = await api.getStationsStats(selectedCity);
+      setStationsData(data);
+      console.log('📊 Статистика станций:', data);
+    } catch (error) {
+      console.error('Ошибка загрузки карты станций:', error);
     }
   };
 
-// Загрузка карты станций
-const loadStationsMap = async () => {
-  try {
-    const data = await api.getStationsStats(selectedCity);
-    setStationsData(data);
+  const loadGroupMembers = async () => {
+    if (!currentGroup || !currentGroup.station) {
+      setGroupMembers([]);
+      return;
+    }
     
-    console.log('📊 Статистика станций:', data);
-    console.log('📊 stationStats:', data.stationStats);
-    console.log('📊 totalStats:', data.totalStats);
-  } catch (error) {
-    console.error('Ошибка загрузки карты станций:', error);
-  }
-};
+    try {
+      const users = await api.getUsers();
+      const groupUsers = users.filter(user => 
+        user.station === currentGroup.station && 
+        user.is_connected === true
+      );
+      setGroupMembers(groupUsers);
+    } catch (error) {
+      console.error('Ошибка загрузки участников группы:', error);
+      setGroupMembers([]);
+    }
+  };
 
-
-
-// Загрузка участников группы
-const loadGroupMembers = async () => {
-  if (!currentGroup || !currentGroup.station) {
-    console.log('❌ loadGroupMembers: нет currentGroup или station');
-    setGroupMembers([]);
-    return;
-  }
-  
-  try {
-    console.log('🔍 loadGroupMembers: загрузка для станции', currentGroup.station);
-    const users = await api.getUsers();
-    console.log('🔍 Все пользователи:', users);
-    
-    const groupUsers = users.filter(user => 
-      user.station === currentGroup.station && 
-      user.is_connected === true
-    );
-    
-    console.log('🔍 Отфильтрованные пользователи:', groupUsers);
-    setGroupMembers(groupUsers);
-    
-  } catch (error) {
-    console.error('Ошибка загрузки участников группы:', error);
-    setGroupMembers([]);
-  }
-};
-
-  // Загрузка всех запросов с кэшированием
   const loadRequests = async (forceRefresh = false) => {
     const now = Date.now();
     
@@ -245,181 +199,113 @@ const loadGroupMembers = async () => {
       return usersCache || [];
     }
   };
-// Автоматическая загрузка участников при изменении currentGroup или currentScreen
-useEffect(() => {
-  if (currentScreen === 'joined' && currentGroup) {
-    console.log('🔄 Автозагрузка участников для joined экрана');
-    loadGroupMembers();
-    loadRequests(true);
-  }
-}, [currentScreen, currentGroup]);
-  
 
-
-
-
-
-
-const handleEnterWaitingRoom = async () => {
-   
-
-
-  console.log('🔍 Проверка переменных:');
-console.log('- currentScreen переменная:', currentScreen);
-console.log('- setCurrentScreen функция:', typeof setCurrentScreen);
-  console.log('🚪 === НАЧАЛО handleEnterWaitingRoom ===');
-  console.log('📍 Текущий экран:', currentScreen);
-  console.log('📍 selectedCity:', selectedCity);
-  console.log('📍 selectedGender:', selectedGender);
-  
-  setIsLoading(true);
-
-  try {
-    const randomName = helpers.getRandomName(selectedGender);
-    console.log('📍 Сгенерировано имя:', randomName);
-    
-    const userData = {
-      name: randomName,
-      station: '',
-      wagon: '',
-      color: '',
-      colorCode: helpers.getRandomColor(),
-      status: 'В режиме ожидания',
-      timer: "00:00",
-      online: true,
-      city: selectedCity,
-      gender: selectedGender,
-      position: '',
-      mood: '',
-      isWaiting: true,
-      isConnected: false
-    };
-
-    console.log('📍 Отправляем запрос к API...');
-    const createdUser = await api.createUser(userData);
-    console.log('📍 Ответ от API:', createdUser);
-    
-    if (createdUser) {
-      userIdRef.current = createdUser.id;
-      console.log('✅ Пользователь создан, ID:', createdUser.id);
-      
-      // ПРИНУДИТЕЛЬНЫЙ ПЕРЕХОД
-  setTimeout(() => {
-    console.log('🔄 Принудительный переход через setTimeout');
-    setCurrentScreen('waiting');
-  }, 100);
-      
-      // Принудительно обновляем сразу
-      setTimeout(() => {
-        console.log('📍 После setTimeout - currentScreen должен быть:', 'waiting');
-      }, 0);
-
-      console.log('📍 Загружаем дополнительные данные...');
-      await loadStationsMap();
-      await loadRequests();
-      
-      console.log('✅ ВСЕ ОПЕРАЦИИ ВЫПОЛНЕНЫ');
-    } else {
-      console.error('❌ createdUser is null или undefined');
-    }
-  } catch (error) {
-    console.error('❌ ОШИБКА в handleEnterWaitingRoom:', error);
-    console.error('❌ Stack:', error.stack);
-  } finally {
-    setIsLoading(false);
-    console.log('🚪 === КОНЕЦ handleEnterWaitingRoom ===');
-  }
-};
-
-  const restoreSelectedStation = () => {
-    const savedStation = localStorage.getItem('selectedStation');
-    if (savedStation) {
-      setCurrentSelectedStation(savedStation);
-    }
-  };
-
-  const updateStationTitle = (stationName) => {
-    console.log('✅ Заголовок обновлен:', stationName);
-  };
-
-  const forceRefreshUserDisplay = () => {
-    console.log('🔄 Принудительное обновление отображения пользователей');
-    
-    if (currentScreen === 'waiting') {
-      loadStationsMap();
-      loadRequests(true);
-    } else if (currentScreen === 'joined') {
+  useEffect(() => {
+    if (currentScreen === 'joined' && currentGroup) {
       loadGroupMembers();
       loadRequests(true);
     }
-  };
+  }, [currentScreen, currentGroup]);
 
-  // Подтверждение выбора станции
-  const handleConfirmStation = async () => {
-  if (!clothingColor) {
-    bridge.send("VKWebAppShowSnackbar", {
-      text: 'Пожалуйста, укажите цвет верхней одежды'
-    });
-    return;
-  }
-  
-  if (!currentSelectedStation) {
-    bridge.send("VKWebAppShowSnackbar", {
-      text: 'Пожалуйста, выберите станцию на карте'
-    });
-    return;
-  }
-  
-  if (userIdRef.current) {
+  const handleEnterWaitingRoom = async () => {
+    console.log('🚪 === НАЧАЛО handleEnterWaitingRoom ===');
+    
     setIsLoading(true);
+
     try {
-      await api.updateUser(userIdRef.current, {
-        station: currentSelectedStation,
-        wagon: wagonNumber,
-        color: clothingColor,
-        is_waiting: false,
-        is_connected: true,
-        status: 'Выбрал станцию: ' + currentSelectedStation
-      });
-
-      const result = await api.joinStation({
-        userId: userIdRef.current,
-        station: currentSelectedStation
-      });
+      const randomName = helpers.getRandomName(selectedGender);
       
-      console.log('🔍 Результат joinStation:', result);
+      const userData = {
+        name: randomName,
+        station: '',
+        wagon: '',
+        color: '',
+        colorCode: helpers.getRandomColor(),
+        status: 'В режиме ожидания',
+        timer: "00:00",
+        online: true,
+        city: selectedCity,
+        gender: selectedGender,
+        position: '',
+        mood: '',
+        isWaiting: true,
+        isConnected: false
+      };
 
-      // ИСПРАВЛЕННАЯ ПРОВЕРКА РЕЗУЛЬТАТА
-      if (result && result.success) {
-        updateStationTitle(currentSelectedStation);
-
-        setCurrentGroup({
-          station: currentSelectedStation,
-          users: result.users || [] // ЗАЩИТА ОТ UNDEFINED
-        });
-        setCurrentScreen('joined');
+      const createdUser = await api.createUser(userData);
+      
+      if (createdUser) {
+        userIdRef.current = createdUser.id;
         
-        // Загружаем данные для комнаты станции
         setTimeout(() => {
-          loadGroupMembers();
-          loadRequests(true);
+          setCurrentScreen('waiting');
         }, 100);
-      } else {
-        throw new Error('Не удалось присоединиться к станции');
+
+        await loadStationsMap();
+        await loadRequests();
       }
-      
     } catch (error) {
-      console.error('Ошибка при обновлении параметров:', error);
-      bridge.send("VKWebAppShowSnackbar", {
-        text: 'Ошибка: ' + error.message
-      });
+      console.error('❌ ОШИБКА в handleEnterWaitingRoom:', error);
     } finally {
       setIsLoading(false);
     }
-  }
-};
+  };
 
-  // Выход из группы
+  const handleConfirmStation = async () => {
+    if (!clothingColor) {
+      bridge.send("VKWebAppShowSnackbar", {
+        text: 'Пожалуйста, укажите цвет верхней одежды'
+      });
+      return;
+    }
+    
+    if (!currentSelectedStation) {
+      bridge.send("VKWebAppShowSnackbar", {
+        text: 'Пожалуйста, выберите станцию на карте'
+      });
+      return;
+    }
+    
+    if (userIdRef.current) {
+      setIsLoading(true);
+      try {
+        await api.updateUser(userIdRef.current, {
+          station: currentSelectedStation,
+          wagon: wagonNumber,
+          color: clothingColor,
+          is_waiting: false,
+          is_connected: true,
+          status: 'Выбрал станцию: ' + currentSelectedStation
+        });
+
+        const result = await api.joinStation({
+          userId: userIdRef.current,
+          station: currentSelectedStation
+        });
+        
+        if (result && result.success) {
+          setCurrentGroup({
+            station: currentSelectedStation,
+            users: result.users || []
+          });
+          setCurrentScreen('joined');
+          
+          setTimeout(() => {
+            loadGroupMembers();
+            loadRequests(true);
+          }, 100);
+        }
+      } catch (error) {
+        console.error('Ошибка при обновлении параметров:', error);
+        bridge.send("VKWebAppShowSnackbar", {
+          text: 'Ошибка: ' + error.message
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    }
+  };
+
   const handleLeaveGroup = async () => {
     if (userIdRef.current) {
       try {
@@ -439,8 +325,10 @@ console.log('- setCurrentScreen функция:', typeof setCurrentScreen);
     setSelectedMood('');
   };
 
-  // Таймер функции
+  // Таймер функции - УПРОЩЕННАЯ ВЕРСИЯ
   const startTimer = () => {
+    console.log('🟢 startTimer вызван');
+    
     if (timerIntervalRef.current) {
       console.log('⏹️ Таймер уже запущен');
       return;
@@ -449,7 +337,7 @@ console.log('- setCurrentScreen функция:', typeof setCurrentScreen);
     timerSecondsRef.current = selectedMinutes * 60;
     setTimerActive(true);
     
-    timerIntervalRef.current = setInterval(async () => {
+    timerIntervalRef.current = setInterval(() => {
       timerSecondsRef.current--;
       
       if (timerSecondsRef.current <= 0) {
@@ -458,35 +346,14 @@ console.log('- setCurrentScreen функция:', typeof setCurrentScreen);
           text: 'Время ожидания истекло!'
         });
       }
-      
-      // Обновляем оставшееся время на сервере каждые 30 секунд
-      if (timerSecondsRef.current % 30 === 0 && userIdRef.current) {
-        try {
-          await api.updateUser(userIdRef.current, { 
-            timer_seconds: timerSecondsRef.current
-          });
-        } catch (error) {
-          console.error('Ошибка обновления таймера на сервере:', error);
-        }
-      }
     }, 1000);
     
-    // Сохраняем таймер на сервере
-    if (userIdRef.current) {
-      const timerEnd = new Date(Date.now() + timerSecondsRef.current * 1000);
-      api.updateUser(userIdRef.current, {
-        timer_seconds: timerSecondsRef.current,
-        timer_end: timerEnd.toISOString(),
-        show_timer: true,
-        status: generateUserStatus()
-      }).then(() => {
-        console.log('✅ Таймер сохранен на сервере');
-        forceRefreshUserDisplay();
-      }).catch(console.error);
-    }
+    console.log('✅ Таймер запущен');
   };
 
   const stopTimer = () => {
+    console.log('🔴 stopTimer вызван');
+    
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
       timerIntervalRef.current = null;
@@ -495,17 +362,7 @@ console.log('- setCurrentScreen функция:', typeof setCurrentScreen);
     timerSecondsRef.current = 0;
     setTimerActive(false);
     
-    // Убираем таймер на сервере
-    if (userIdRef.current) {
-      api.updateUser(userIdRef.current, {
-        timer_seconds: 0,
-        show_timer: false,
-        status: generateUserStatus()
-      }).then(() => {
-        console.log('✅ Таймер остановлен на сервере');
-        forceRefreshUserDisplay();
-      }).catch(console.error);
-    }
+    console.log('✅ Таймер остановлен');
   };
 
   const generateUserStatus = () => {
@@ -521,30 +378,20 @@ console.log('- setCurrentScreen функция:', typeof setCurrentScreen);
     }
   };
 
-  // Обработчики выбора
-  const handleCitySelect = (city) => {
-    setSelectedCity(city);
-  };
-
-  const handleGenderSelect = (gender) => {
-    setSelectedGender(gender);
-  };
+  const handleCitySelect = (city) => setSelectedCity(city);
+  const handleGenderSelect = (gender) => setSelectedGender(gender);
 
   const handlePositionSelect = (position) => {
-  setSelectedPosition(position);
-  localStorage.setItem('selectedPosition', position);
-  
-  // НЕМЕДЛЕННОЕ ОБНОВЛЕНИЕ
-  updateUserState();
-};
+    setSelectedPosition(position);
+    localStorage.setItem('selectedPosition', position);
+    updateUserState();
+  };
 
-const handleMoodSelect = (mood) => {
-  setSelectedMood(mood);
-  localStorage.setItem('selectedMood', mood);
-  
-  // НЕМЕДЛЕННОЕ ОБНОВЛЕНИЕ
-  updateUserState();
-};
+  const handleMoodSelect = (mood) => {
+    setSelectedMood(mood);
+    localStorage.setItem('selectedMood', mood);
+    updateUserState();
+  };
 
   const handleStationSelect = (stationName) => {
     setCurrentSelectedStation(stationName);
@@ -556,52 +403,45 @@ const handleMoodSelect = (mood) => {
     localStorage.setItem('selectedTimerMinutes', minutes);
   };
 
-const updateUserState = async () => {
-  if (!userIdRef.current) return;
-  
-  try {
-    const newStatus = generateUserStatus();
+  const updateUserState = async () => {
+    if (!userIdRef.current) return;
     
-    // ОБНОВЛЯЕМ СЕРВЕР
-    await api.updateUser(userIdRef.current, { 
-      status: newStatus,
-      position: selectedPosition,
-      mood: selectedMood
-    });
-    
-    // ОБНОВЛЯЕМ ЛОКАЛЬНОЕ СОСТОЯНИЕ СРАЗУ
-    setGroupMembers(prevMembers => 
-      prevMembers.map(member => 
-        member.id === userIdRef.current 
-          ? { 
-              ...member, 
-              status: newStatus,
-              position: selectedPosition,
-              mood: selectedMood
-            }
-          : member
-      )
-    );
-    
-    // ОБНОВЛЯЕМ ДАННЫЕ С СЕРВЕРА
-    await loadGroupMembers();
-    
-  } catch (error) {
-    console.error('❌ Ошибка обновления состояния:', error);
-  }};
+    try {
+      const newStatus = generateUserStatus();
+      await api.updateUser(userIdRef.current, { 
+        status: newStatus,
+        position: selectedPosition,
+        mood: selectedMood
+      });
+      
+      setGroupMembers(prevMembers => 
+        prevMembers.map(member => 
+          member.id === userIdRef.current 
+            ? { 
+                ...member, 
+                status: newStatus,
+                position: selectedPosition,
+                mood: selectedMood
+              }
+            : member
+        )
+      );
+      
+      await loadGroupMembers();
+    } catch (error) {
+      console.error('❌ Ошибка обновления состояния:', error);
+    }
+  };
 
   const improvedPingActivity = async () => {
     if (!userIdRef.current) return false;
     
     const now = Date.now();
-    if (now - lastPingTime < PING_INTERVAL) {
-      return false; // Слишком рано для следующего ping
-    }
+    if (now - lastPingTime < PING_INTERVAL) return false;
     
     try {
       await api.pingActivity(userIdRef.current);
       setLastPingTime(now);
-      console.log('✅ Активность обновлена');
       return true;
     } catch (error) {
       console.error('Ошибка пинга активности:', error);
@@ -609,7 +449,6 @@ const updateUserState = async () => {
     }
   };
 
-  // Функции переключения экранов
   const showSetup = () => setCurrentScreen('setup');
   const showWaitingRoom = () => {
     if (!userIdRef.current) {
@@ -630,84 +469,58 @@ const updateUserState = async () => {
     setCurrentScreen('joined');
   };
 
-  // Рендер карты станций
-const renderStationsMap = () => {
-  console.log('🔍 renderStationsMap вызван:', {
-    stationsData,
-    hasStationStats: !!stationsData.stationStats,
-    stationStats: stationsData.stationStats,
-    selectedCity,
-    allStations: helpers.stations[selectedCity]
-  });
-  
-  if (!stationsData.stationStats) {
-    console.log('❌ Нет stationStats данных');
-    return <div className="loading">Загрузка карты станций...</div>;
-  }
-  
-  const allStations = helpers.stations[selectedCity];
-  const stationsMap = {};
-  
-  // Создаем карту станций для быстрого доступа
-  stationsData.stationStats.forEach(station => {
-    stationsMap[station.station] = station;
-    console.log(`📊 Станция в данных: ${station.station}`, station);
-  });
-  
-  console.log('🔍 Все станции в городе:', allStations);
-  console.log('🔍 Карта станций:', stationsMap);
-  
-  return allStations.map(stationName => {
-    const stationData = stationsMap[stationName];
-    let userCount = 0;
-    let waitingCount = 0;
-    let connectedCount = 0;
-    let stationClass = 'empty';
+  const renderStationsMap = () => {
+    if (!stationsData.stationStats) return <div className="loading">Загрузка карты станций...</div>;
     
-    console.log(`🔍 Обработка станции ${stationName}:`, stationData);
+    const allStations = helpers.stations[selectedCity];
+    const stationsMap = {};
     
-    if (stationData) {
-      userCount = stationData.totalUsers || 0;
-      waitingCount = stationData.waiting || 0;
-      connectedCount = stationData.connected || 0;
+    stationsData.stationStats.forEach(station => {
+      stationsMap[station.station] = station;
+    });
+    
+    return allStations.map(stationName => {
+      const stationData = stationsMap[stationName];
+      let userCount = 0;
+      let waitingCount = 0;
+      let connectedCount = 0;
+      let stationClass = 'empty';
       
-      if (connectedCount > 0) {
-        stationClass = 'connected';
-      } else if (waitingCount > 0) {
-        stationClass = 'waiting';
+      if (stationData) {
+        userCount = stationData.totalUsers || 0;
+        waitingCount = stationData.waiting || 0;
+        connectedCount = stationData.connected || 0;
+        
+        if (connectedCount > 0) {
+          stationClass = 'connected';
+        } else if (waitingCount > 0) {
+          stationClass = 'waiting';
+        }
       }
-    }
-    
-    const isSelected = currentSelectedStation === stationName;
-    
-    return (
-      <div 
-        key={stationName}
-        className={`station-map-item ${stationClass} ${isSelected ? 'selected' : ''}`}
-        onClick={() => handleStationSelect(stationName)}
-      >
-        <div className="station-name">{stationName}</div>
-        {userCount > 0 ? (
-          <div className="station-counts">
-            {waitingCount > 0 && <span className="station-count count-waiting">{waitingCount}⏳</span>}
-            {connectedCount > 0 && <span className="station-count count-connected">{connectedCount}✅</span>}
-          </div>
-        ) : (
-          <div style={{fontSize: '10px', color: '#666'}}>Пусто</div>
-        )}
-      </div>
-    );
-  });
-};
+      
+      const isSelected = currentSelectedStation === stationName;
+      
+      return (
+        <div 
+          key={stationName}
+          className={`station-map-item ${stationClass} ${isSelected ? 'selected' : ''}`}
+          onClick={() => handleStationSelect(stationName)}
+        >
+          <div className="station-name">{stationName}</div>
+          {userCount > 0 ? (
+            <div className="station-counts">
+              {waitingCount > 0 && <span className="station-count count-waiting">{waitingCount}⏳</span>}
+              {connectedCount > 0 && <span className="station-count count-connected">{connectedCount}✅</span>}
+            </div>
+          ) : (
+            <div style={{fontSize: '10px', color: '#666'}}>Пусто</div>
+          )}
+        </div>
+      );
+    });
+  };
 
-  // Рендер участников группы
   const renderGroupMembers = () => {
-     console.log('🔍 renderGroupMembers вызван:', {
-    groupMembers: groupMembers,
-    groupMembersLength: groupMembers.length,
-    currentGroup: currentGroup,
-    userId: userIdRef.current
-  });
     if (groupMembers.length === 0) {
       return <div className="no-requests">Нет участников на этой станции</div>;
     }
@@ -717,21 +530,15 @@ const renderStationsMap = () => {
       
       let stateDetails = '';
       if (user.position || user.mood) {
-        if (user.position) {
-          stateDetails += `<span class="state-highlight">${user.position}</span>`;
-        }
+        if (user.position) stateDetails += `<span class="state-highlight">${user.position}</span>`;
         if (user.mood) {
           if (user.position) stateDetails += ' • ';
           stateDetails += `<span class="state-highlight">${user.mood}</span>`;
         }
-      } else {
-        stateDetails = 'Позиция не указана • Настроение не указано';
       }
       
       let additionalInfo = '';
-      if (user.color) {
-        additionalInfo += `🎨 ${user.color}`;
-      }
+      if (user.color) additionalInfo += `🎨 ${user.color}`;
       if (user.wagon && user.wagon !== '' && user.wagon !== 'Не указан') {
         if (additionalInfo) additionalInfo += ' • ';
         additionalInfo += `🚇 Вагон ${user.wagon}`;
@@ -793,7 +600,6 @@ const renderStationsMap = () => {
         </header>
         
         <div className="content">
-          {/* Экран выбора параметров */}
           {currentScreen === 'setup' && (
             <div id="setup-screen" className="screen active">
               <h2>Настройка профиля</h2>
@@ -853,7 +659,6 @@ const renderStationsMap = () => {
             </div>
           )}
 
-          {/* Экран комнаты ожидания */}
           {currentScreen === 'waiting' && (
             <div id="waiting-room-screen" className="screen">
               <button className="back-btn" onClick={showSetup}>
@@ -875,15 +680,15 @@ const renderStationsMap = () => {
                 <h3>🗺️ Карта станций метро</h3>
                 
                 <div className="map-legend">
-                        <div className="legend-item">
-                          <div className="legend-color connected"></div>
-                          <span>Выбрали станцию: {stationsData.totalStats?.total_connected || 0}</span>
-                        </div>
-                        <div className="legend-item">
-                          <div className="legend-color waiting"></div>
-                          <span>В режиме ожидания: {stationsData.totalStats?.total_waiting || 0}</span>
-                        </div>
-                      </div>
+                  <div className="legend-item">
+                    <div className="legend-color connected"></div>
+                    <span>Выбрали станцию: {stationsData.totalStats?.total_connected || 0}</span>
+                  </div>
+                  <div className="legend-item">
+                    <div className="legend-color waiting"></div>
+                    <span>В режиме ожидания: {stationsData.totalStats?.total_waiting || 0}</span>
+                  </div>
+                </div>
                 
                 <div className="metro-map" id="metro-map">
                   {renderStationsMap()}
@@ -991,7 +796,6 @@ const renderStationsMap = () => {
             </div>
           )}
 
-          {/* Экран после присоединения */}
           {currentScreen === 'joined' && (
             <div id="joined-room-screen" className="screen">
               <button className="back-btn" onClick={handleLeaveGroup}>
