@@ -663,7 +663,83 @@ select:focus, input:focus {
 }
 
 /* ===== ТАЙМЕРЫ ===== */
+/* Timer Component Styles */
+.timer-component {
+  margin: 20px 0;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #f9f9f9;
+  overflow: hidden;
+}
 
+.timer-header {
+  padding: 12px 15px;
+  background: #e9ecef;
+  cursor: pointer;
+  border-bottom: 1px solid #ddd;
+  user-select: none;
+}
+
+.timer-header h4 {
+  margin: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.timer-header:hover {
+  background: #dee2e6;
+}
+
+.timer-content {
+  padding: 15px;
+}
+
+.timer-options {
+  margin-bottom: 15px;
+}
+
+.timer-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.timer-btn {
+  padding: 8px 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.timer-btn.active {
+  background: #007bff;
+  color: white;
+  border-color: #007bff;
+}
+
+.timer-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.timer-btn:not(:disabled):hover {
+  background: #f8f9fa;
+}
+
+.timer-display {
+  text-align: center;
+}
+
+.timer-time {
+  font-size: 24px;
+  font-weight: bold;
+  margin: 10px 0;
+  color: #333;
+}
 .compact-timer {
     background: #f8f9fa;
     border: 2px solid #0057b8;
