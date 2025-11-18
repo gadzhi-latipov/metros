@@ -695,7 +695,7 @@ export const App = () => {
                   </div>
                 
              
-                     {/* <TimerComponent 
+                     <TimerComponent 
                             selectedMinutes={selectedMinutes}
                           onTimerSelect={handleTimerSelect}
                           userId={userIdRef.current}
@@ -705,7 +705,7 @@ export const App = () => {
                             }
                           }}
                   
-                     /> */}
+                     />
                            
                 <button 
                   className="btn btn-success" 
