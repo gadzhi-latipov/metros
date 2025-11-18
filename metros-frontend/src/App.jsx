@@ -115,19 +115,17 @@ export const App = () => {
     fetchUserData();
     const cleanupGlobalRefresh = startGlobalRefresh();
 
-    return () => {
-      cleanupGlobalRefresh();
-      
-      }
-      if (globalRefreshIntervalRef.current) {
-        clearInterval(globalRefreshIntervalRef.current);
-      }
-      if (userIdRef.current) {
-        api.deleteUser(userIdRef.current).catch(console.error);
-      }
-    });
-  }, []
-
+      return () => {
+    cleanupGlobalRefresh();
+    
+    if (globalRefreshIntervalRef.current) {
+      clearInterval(globalRefreshIntervalRef.current);
+    }
+    if (userIdRef.current) {
+      api.deleteUser(userIdRef.current).catch(console.error);
+    }
+  };
+}, []);
 
 
 
@@ -824,4 +822,4 @@ export const App = () => {
         </footer>
       </div>
     </div>
-  );
+  );}
