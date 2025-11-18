@@ -1161,3 +1161,25 @@ footer {
     font-size: 14px;
     opacity: 0.8;
 }
+/* Стили для полей с ошибками */
+.input-error {
+  border: 2px solid #ff4444 !important;
+  background-color: #fff5f5 !important;
+}
+
+.map-error {
+  border: 2px solid #ff4444 !important;
+}
+
+.error-message {
+  color: #ff4444;
+  font-size: 12px;
+  margin-top: 5px;
+  display: block;
+}
+.field-hint {
+  color: #666;
+  font-size: 11px;
+  margin-top: 4px;
+  display: block;
+}

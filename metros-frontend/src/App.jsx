@@ -269,59 +269,91 @@ useEffect(() => {
   };
 
   const handleConfirmStation = async () => {
-    if (!clothingColor) {
-      bridge.send("VKWebAppShowSnackbar", {
-        text: 'Пожалуйста, укажите цвет верхней одежды'
-      });
-      return;
+  // Проверка на заполнение обязательного поля
+  if (!clothingColor || clothingColor.trim() === '') {
+    bridge.send("VKWebAppShowSnackbar", {
+      text: '❌ Пожалуйста, укажите цвет верхней одежды или стиль'
+    });
+    
+    // Добавляем визуальное выделение пустого поля
+    const colorInput = document.getElementById('color-select');
+    if (colorInput) {
+      colorInput.style.border = '2px solid #ff4444';
+      colorInput.style.backgroundColor = '#fff5f5';
+      
+      // Убираем выделение через 3 секунды
+      setTimeout(() => {
+        colorInput.style.border = '';
+        colorInput.style.backgroundColor = '';
+      }, 3000);
     }
     
-    if (!currentSelectedStation) {
-      bridge.send("VKWebAppShowSnackbar", {
-        text: 'Пожалуйста, выберите станцию на карте'
-      });
-      return;
+    return;
+  }
+  
+  // Проверка выбора станции
+  if (!currentSelectedStation) {
+    bridge.send("VKWebAppShowSnackbar", {
+      text: '❌ Пожалуйста, выберите станцию на карте'
+    });
+    
+    // Визуальное выделение карты станций
+    const metroMap = document.getElementById('metro-map');
+    if (metroMap) {
+      metroMap.style.border = '2px solid #ff4444';
+      setTimeout(() => {
+        metroMap.style.border = '';
+      }, 3000);
     }
     
-    if (userIdRef.current) {
-      setIsLoading(true);
-      try {
-        await api.updateUser(userIdRef.current, {
-          station: currentSelectedStation,
-          wagon: wagonNumber,
-          color: clothingColor,
-          is_waiting: false,
-          is_connected: true,
-          status: 'Выбрал станцию: ' + currentSelectedStation
-        });
+    return;
+  }
+  
+  // Если все проверки пройдены
+  if (userIdRef.current) {
+    setIsLoading(true);
+    try {
+      await api.updateUser(userIdRef.current, {
+        station: currentSelectedStation,
+        wagon: wagonNumber,
+        color: clothingColor.trim(), // убираем лишние пробелы
+        is_waiting: false,
+        is_connected: true,
+        status: 'Выбрал станцию: ' + currentSelectedStation
+      });
 
-        const result = await api.joinStation({
-          userId: userIdRef.current,
-          station: currentSelectedStation
+      const result = await api.joinStation({
+        userId: userIdRef.current,
+        station: currentSelectedStation
+      });
+      
+      if (result && result.success) {
+        setCurrentGroup({
+          station: currentSelectedStation,
+          users: result.users || []
+        });
+        setCurrentScreen('joined');
+        
+        // Показываем успешное уведомление
+        bridge.send("VKWebAppShowSnackbar", {
+          text: `✅ Вы присоединились к станции ${currentSelectedStation}`
         });
         
-        if (result && result.success) {
-          setCurrentGroup({
-            station: currentSelectedStation,
-            users: result.users || []
-          });
-          setCurrentScreen('joined');
-          
-          setTimeout(() => {
-            loadGroupMembers();
-            loadRequests(true);
-          }, 100);
-        }
-      } catch (error) {
-        console.error('Ошибка при обновлении параметров:', error);
-        bridge.send("VKWebAppShowSnackbar", {
-          text: 'Ошибка: ' + error.message
-        });
-      } finally {
-        setIsLoading(false);
+        setTimeout(() => {
+          loadGroupMembers();
+          loadRequests(true);
+        }, 100);
       }
+    } catch (error) {
+      console.error('Ошибка при обновлении параметров:', error);
+      bridge.send("VKWebAppShowSnackbar", {
+        text: '❌ Ошибка: ' + error.message
+      });
+    } finally {
+      setIsLoading(false);
     }
-  };
+  }
+};
 
   const handleLeaveGroup = async () => {
     if (userIdRef.current) {
@@ -708,16 +740,17 @@ useEffect(() => {
                 </div>
                 
                 <div className="form-group">
-                    <label htmlFor="color-select">Цвет верхней одежды или стиль</label>
-                    <input 
-                      type="text" 
-                      id="color-select" 
-                      placeholder="Например:черный верх,синий низ,очки,шапка" 
-                      value={clothingColor}
-                      onChange={(e) => setClothingColor(e.target.value)}
-                      required 
-                    />
-                  </div>
+  <label htmlFor="color-select">Цвет верхней одежды или стиль *</label>
+  <input 
+    type="text" 
+    id="color-select" 
+    placeholder="Например: черный верх, синий низ, очки, шапка" 
+    value={clothingColor}
+    onChange={(e) => setClothingColor(e.target.value)}
+    required 
+  />
+  <small className="field-hint">Это поле обязательно для заполнения</small>
+</div>
                 
              
                      <TimerComponent 
