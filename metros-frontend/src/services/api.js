@@ -5,13 +5,9 @@ const BASE_URL = 'https://metro-backend-xlkt.onrender.com/api';
 
 console.log('🌐 API URL:', BASE_URL);
 
-
-// Временный мок API для разработки
-let useMockData = false;
-
-console.log('🌐 API Base URL:', BASE_URL);
-
-
+// УДАЛИТЕ ЭТОТ ДУБЛИРУЮЩИЙСЯ КОД:
+// let useMockData = false;
+// console.log('🌐 API Base URL:', BASE_URL);
 
 async function makeRequest(endpoint, options = {}) {
   if (useMockData) {
@@ -34,7 +30,7 @@ async function makeRequest(endpoint, options = {}) {
   };
 
   if (options.body) {
-    config.body = options.body;
+    config.body = JSON.stringify(options.body);
   }
 
   try {
@@ -106,36 +102,36 @@ function mockResponse(endpoint, options) {
         }
       ];
 
-  case '/stations/waiting-room':
-  const url = new URL(`http://test.com${endpoint}`);
-  const city = url.searchParams.get('city') || 'spb';
-  
-  // Все станции для выбранного города
-  const allStations = city === 'moscow' ? [
-    'Авиамоторная', 'Автозаводская', 'Академическая', 'Александровский сад', 'Алексеевская'
-  ] : [
-    'Адмиралтейская', 'Балтийская', 'Василеостровская', 'Владимирская', 'Гостиный двор'
-  ];
-  
-  // Создаем статистику для всех станций
-  const stationStats = allStations.map(station => ({
-    station,
-    waiting: Math.floor(Math.random() * 3),
-    connected: Math.floor(Math.random() * 3),
-    totalUsers: Math.floor(Math.random() * 5)
-  }));
-  
-  const total_waiting = stationStats.reduce((sum, stat) => sum + stat.waiting, 0);
-  const total_connected = stationStats.reduce((sum, stat) => sum + stat.connected, 0);
-  
-  return {
-    stationStats,
-    totalStats: {
-      total_waiting,
-      total_connected,
-      total_users: total_waiting + total_connected
-    }
-  };
+    case '/stations/waiting-room':
+      const url = new URL(`http://test.com${endpoint}`);
+      const city = url.searchParams.get('city') || 'spb';
+      
+      // Все станции для выбранного города
+      const allStations = city === 'moscow' ? [
+        'Авиамоторная', 'Автозаводская', 'Академическая', 'Александровский сад', 'Алексеевская'
+      ] : [
+        'Адмиралтейская', 'Балтийская', 'Василеостровская', 'Владимирская', 'Гостиный двор'
+      ];
+      
+      // Создаем статистику для всех станций
+      const stationStats = allStations.map(station => ({
+        station,
+        waiting: Math.floor(Math.random() * 3),
+        connected: Math.floor(Math.random() * 3),
+        totalUsers: Math.floor(Math.random() * 5)
+      }));
+      
+      const total_waiting = stationStats.reduce((sum, stat) => sum + stat.waiting, 0);
+      const total_connected = stationStats.reduce((sum, stat) => sum + stat.connected, 0);
+      
+      return {
+        stationStats,
+        totalStats: {
+          total_waiting,
+          total_connected,
+          total_users: total_waiting + total_connected
+        }
+      };
 
     case '/stations/join':
       return {
@@ -170,7 +166,7 @@ export const api = {
     console.log('📍 Отправка данных пользователя:', userData);
     return makeRequest('/users', {
       method: 'POST',
-      body: JSON.stringify(userData)
+      body: userData
     });
   },
 
@@ -186,7 +182,7 @@ export const api = {
     console.log('📝 Обновление пользователя:', userId, data);
     return makeRequest(`/users/${userId}`, {
       method: 'PUT',
-      body: JSON.stringify(data)
+      body: data
     });
   },
 
@@ -201,7 +197,7 @@ export const api = {
     console.log('🚇 Присоединение к станции:', data);
     return makeRequest('/rooms/join-station', {
       method: 'POST',
-      body: JSON.stringify(data)
+      body: data
     });
   },
 
@@ -216,7 +212,7 @@ export const api = {
 export const helpers = {
   getRandomName: (gender) => {
     const maleNames = ['Иван-Царевич', 'Кощей Бессмертный', 'Добрыня Никитич', 'Леший', 'Водяной', 'Бабай', 'Соловей-Разбойник', 'Змей Горыныч'];
-const femaleNames = ['Василиса Премудрая', 'Баба Яга', 'Царевна-Лягушка', 'Снегурочка', 'Марья-Искусница', 'Аленушка', 'Кикимора', 'Русалка'];
+    const femaleNames = ['Василиса Премудрая', 'Баба Яга', 'Царевна-Лягушка', 'Снегурочка', 'Марья-Искусница', 'Аленушка', 'Кикимора', 'Русалка'];
 
     const names = gender === 'male' ? maleNames : femaleNames;
     return names[Math.floor(Math.random() * names.length)];
