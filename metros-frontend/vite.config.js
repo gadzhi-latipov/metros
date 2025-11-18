@@ -9,5 +9,13 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true
-  }
+  },
+  // Добавьте эти настройки:
+  resolve: {
+    alias: {
+      '@': '/src'
+    }
+  },
+  // Убедитесь, что base путь правильный для вашего окружения
+  base: './'
 })
