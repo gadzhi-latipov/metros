@@ -234,10 +234,33 @@ select:focus, input:focus {
     padding: 15px;
     text-align: center;
     cursor: pointer;
-    transition: all 0.3s ease;
+    transition: all 0.2s ease;
+  position: relative;
     background: white;
 }
+.state-card.updating {
+  opacity: 0.7;
+  pointer-events: none;
+}
 
+.state-card.updating::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  border: 2px solid #f3f3f3;
+  border-top: 2px solid #007bff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
 .state-card:hover {
     border-color: #007bff;
     transform: translateY(-2px);

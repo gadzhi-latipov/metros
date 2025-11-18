@@ -211,6 +211,19 @@ export const App = () => {
     }
   }, [currentScreen, currentGroup]);
 
+
+  // Автоматическое обновление статуса при изменении позиции или настроения
+useEffect(() => {
+  if (userIdRef.current && (selectedPosition || selectedMood)) {
+    const timeoutId = setTimeout(() => {
+      updateUserState();
+    }, 500); // Небольшая задержка чтобы избежать множественных запросов
+    
+    return () => clearTimeout(timeoutId);
+  }
+}, [selectedPosition, selectedMood]);
+
+
   const handleEnterWaitingRoom = async () => {
     console.log('🚪 === НАЧАЛО handleEnterWaitingRoom ===');
     
@@ -348,22 +361,27 @@ export const App = () => {
 
 
         // обновление индикаторов состояния
-          const handlePositionSelect = async (position) => {
-          setSelectedPosition(position);
-          localStorage.setItem('selectedPosition', position);
-          
-          // Немедленное обновление UI
-          await updateUserState();
-        };
+            const handlePositionSelect = (position) => {
+            const previousPosition = selectedPosition;
+            setSelectedPosition(position);
+            localStorage.setItem('selectedPosition', position);
+            
+            // Если позиция изменилась, обновляем статус
+            if (previousPosition !== position) {
+              updateUserState();
+            }
+          };
 
-
-          const handleMoodSelect = async (mood) => {
-          setSelectedMood(mood);
-          localStorage.setItem('selectedMood', mood);
-          
-          // Немедленное обновление UI
-          await updateUserState();
-        };
+          const handleMoodSelect = (mood) => {
+            const previousMood = selectedMood;
+            setSelectedMood(mood);
+            localStorage.setItem('selectedMood', mood);
+            
+            // Если настроение изменилось, обновляем статус
+            if (previousMood !== mood) {
+              updateUserState();
+            }
+          };
 
   const handleStationSelect = (stationName) => {
     setCurrentSelectedStation(stationName);
