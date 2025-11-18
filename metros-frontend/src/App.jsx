@@ -117,8 +117,7 @@ export const App = () => {
 
     return () => {
       cleanupGlobalRefresh();
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
+      
       }
       if (globalRefreshIntervalRef.current) {
         clearInterval(globalRefreshIntervalRef.current);
@@ -126,8 +125,11 @@ export const App = () => {
       if (userIdRef.current) {
         api.deleteUser(userIdRef.current).catch(console.error);
       }
-    };
-  }, []);
+    });
+  }, []
+
+
+
 
   useEffect(() => {
     console.log('🔄 currentScreen ИЗМЕНИЛСЯ:', currentScreen);
@@ -681,19 +683,18 @@ export const App = () => {
                 </div>
                 
                 <div className="form-group">
-                  <label htmlFor="color-select">Цвет верхней одежды или стиль</label>
-                  <input 
-                    type="text" 
-                    id="color-select" 
-                    placeholder="Например:черный верх,синий низ,очки,шапка" 
-                    value={clothingColor}
-                    onChange={(e) => setClothingColor(e.target.value)}
-                    required 
-                  />
-                </div>
+                    <label htmlFor="color-select">Цвет верхней одежды или стиль</label>
+                    <input 
+                      type="text" 
+                      id="color-select" 
+                      placeholder="Например:черный верх,синий низ,очки,шапка" 
+                      value={clothingColor}
+                      onChange={(e) => setClothingColor(e.target.value)}
+                      required 
+                    />
+                  </div>
                 
-               console.log('🔄 App.jsx - перед рендером TimerComponent');
-                console.log('TimerComponent import:', TimerComponent);
+             
                             {/* <TimerComponent 
                             
                               selectedMinutes={selectedMinutes}
@@ -824,4 +825,3 @@ export const App = () => {
       </div>
     </div>
   );
-};
