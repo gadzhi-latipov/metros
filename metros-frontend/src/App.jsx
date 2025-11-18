@@ -346,17 +346,22 @@ export const App = () => {
   const handleCitySelect = (city) => setSelectedCity(city);
   const handleGenderSelect = (gender) => setSelectedGender(gender);
 
-  const handlePositionSelect = (position) => {
-    setSelectedPosition(position);
-    localStorage.setItem('selectedPosition', position);
-    updateUserState();
-  };
+  const handlePositionSelect = async (position) => {
+  setSelectedPosition(position);
+  localStorage.setItem('selectedPosition', position);
+  
+  // Немедленное обновление UI
+  await updateUserState();
+};
 
-  const handleMoodSelect = (mood) => {
-    setSelectedMood(mood);
-    localStorage.setItem('selectedMood', mood);
-    updateUserState();
-  };
+
+  const handleMoodSelect = async (mood) => {
+  setSelectedMood(mood);
+  localStorage.setItem('selectedMood', mood);
+  
+  // Немедленное обновление UI
+  await updateUserState();
+};
 
   const handleStationSelect = (stationName) => {
     setCurrentSelectedStation(stationName);
