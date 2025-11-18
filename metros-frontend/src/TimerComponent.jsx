@@ -1,196 +1,117 @@
-import { useState, useEffect, useRef } from 'react';
-import bridge from '@vkontakte/vk-bridge';
-import { helpers } from './services/api';
+import { useState, useEffect } from 'react';
+
 export const TimerComponent = ({ 
   selectedMinutes, 
   onTimerSelect, 
-  userId,
+  userId, 
   onStatusUpdate 
 }) => {
-  console.log('🎯 TimerComponent загружен!', { selectedMinutes, userId });
+  const [timeLeft, setTimeLeft] = useState(selectedMinutes * 60);
+  const [isActive, setIsActive] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false); // Новое состояние для свертывания/раскрытия
 
-  const testClick = () => {
-    console.log('✅ Тестовая кнопка работает!');
-  };
-
-  // 🔧 ДИАГНОСТИКА - добавьте этот console.log
-  console.log('🔧 TimerComponent рендерится:', { 
-    selectedMinutes, 
-    userId,
-    hasOnTimerSelect: !!onTimerSelect,
-    hasOnStatusUpdate: !!onStatusUpdate
-  });
-  const [timerActive, setTimerActive] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(0);
-  
-  const timerIntervalRef = useRef(null);
-
-  // Сброс таймера при изменении минут
   useEffect(() => {
-    if (!timerActive) {
-      setTimeLeft(selectedMinutes * 60);
-    }
-  }, [selectedMinutes, timerActive]);
-
-  const startTimer = async () => {
-    console.log('🟢 startTimer вызван, минут:', selectedMinutes);
+    let interval = null;
     
-    if (timerIntervalRef.current) {
-      console.log('⏹️ Таймер уже запущен');
-      return;
-    }
-    
-    const initialSeconds = selectedMinutes * 60;
-    setTimeLeft(initialSeconds);
-    setTimerActive(true);
-    
-    // Обновляем статус пользователя
-    if (userId && onStatusUpdate) {
-      try {
-        await onStatusUpdate({
-          show_timer: true,
-          timer_seconds: initialSeconds,
-          status: `Таймер запущен: ${selectedMinutes} мин`
-        });
-      } catch (error) {
-        console.error('Ошибка обновления статуса:', error);
-      }
-    }
-    
-    timerIntervalRef.current = setInterval(() => {
-      setTimeLeft(prev => {
-        const newTime = prev - 1;
-        
-        // Обновляем статус каждые 30 секунд
-        if (userId && onStatusUpdate && newTime % 30 === 0) {
-          onStatusUpdate({
-            timer_seconds: newTime,
-            status: `Таймер: ${helpers.formatTime(newTime)}`
-          }).catch(console.error);
-        }
-        
-        if (newTime <= 0) {
-          clearInterval(timerIntervalRef.current);
-          timerIntervalRef.current = null;
-          setTimerActive(false);
-          
-          bridge.send("VKWebAppShowSnackbar", {
-            text: 'Время ожидания истекло!'
-          });
-          
-          if (userId && onStatusUpdate) {
-            onStatusUpdate({
-              show_timer: false,
-              timer_seconds: 0,
-              status: 'Время ожидания истекло'
-            }).catch(console.error);
-          }
-          
-          return 0;
-        }
-        
-        return newTime;
-      });
-    }, 1000);
-    
-    console.log('✅ Таймер запущен');
-  };
-
-  const stopTimer = async () => {
-    console.log('🔴 stopTimer вызван');
-    
-    if (timerIntervalRef.current) {
-      clearInterval(timerIntervalRef.current);
-      timerIntervalRef.current = null;
-    }
-    
-    setTimerActive(false);
-    setTimeLeft(selectedMinutes * 60);
-    
-    // Обновляем статус пользователя
-    if (userId && onStatusUpdate) {
-      try {
-        await onStatusUpdate({
+    if (isActive && timeLeft > 0) {
+      interval = setInterval(() => {
+        setTimeLeft(timeLeft => timeLeft - 1);
+      }, 1000);
+    } else if (timeLeft === 0) {
+      setIsActive(false);
+      // Оповещаем о завершении таймера
+      if (onStatusUpdate) {
+        onStatusUpdate({
           show_timer: false,
           timer_seconds: 0,
-          status: 'Таймер остановлен'
+          status: 'Таймер завершен'
         });
-      } catch (error) {
-        console.error('Ошибка обновления статуса:', error);
       }
     }
     
-    console.log('✅ Таймер остановлен');
+    return () => clearInterval(interval);
+  }, [isActive, timeLeft, onStatusUpdate]);
+
+  const startTimer = () => {
+    if (selectedMinutes > 0) {
+      setIsActive(true);
+      setTimeLeft(selectedMinutes * 60);
+      
+      if (onStatusUpdate) {
+        onStatusUpdate({
+          show_timer: true,
+          timer_seconds: selectedMinutes * 60,
+          status: `Таймер установлен: ${selectedMinutes} мин`
+        });
+      }
+    }
   };
 
-  // Очистка при размонтировании
-  useEffect(() => {
-    return () => {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-      }
-    };
-  }, []);
+  const stopTimer = () => {
+    setIsActive(false);
+    if (onStatusUpdate) {
+      onStatusUpdate({
+        show_timer: false,
+        timer_seconds: 0
+      });
+    }
+  };
+
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
 
   return (
-    <div className="compact-timer" id="waiting-room-timer">
-     
-      <div className="timer-header">
-        <div className="timer-title">⏰ Таймер ожидания</div>
-        <div className="timer-status">
-          {timerActive ? 'Активен' : 'Не активен'}
-        </div>
+    <div className="timer-component">
+      {/* Заголовок-кнопка для раскрытия/сворачивания */}
+      <div 
+        className="timer-header"
+        onClick={() => setIsExpanded(!isExpanded)}
+      >
+        <h4>⏰ Таймер присутствия {isExpanded ? '▲' : '▼'}</h4>
       </div>
-      <div className="timer-expanded active">
-        <p>Выберите время ожидания на станции</p>
-        <div className="timer-options">
-          <button 
-            type="button" 
-            className={`btn timer-option ${selectedMinutes === 5 ? 'active' : ''}`}
-            onClick={() => onTimerSelect(5)}
-          >
-            5 минут
-          </button>
-          <button 
-            type="button" 
-            className={`btn timer-option ${selectedMinutes === 10 ? 'active' : ''}`}
-            onClick={() => onTimerSelect(10)}
-          >
-            10 минут
-          </button>
-          <button 
-            type="button" 
-            className={`btn timer-option ${selectedMinutes === 15 ? 'active' : ''}`}
-            onClick={() => onTimerSelect(15)}
-          >
-            15 минут
-          </button>
+
+      {/* Содержимое таймера */}
+      {isExpanded && (
+        <div className="timer-content">
+          <div className="timer-options">
+            <label>Установить таймер на:</label>
+            <div className="timer-buttons">
+              {[5, 10, 15, 20, 30].map(minutes => (
+                <button
+                  key={minutes}
+                  className={`timer-btn ${selectedMinutes === minutes ? 'active' : ''}`}
+                  onClick={() => onTimerSelect(minutes)}
+                  disabled={isActive}
+                >
+                  {minutes} мин
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="timer-display">
+            {isActive ? (
+              <>
+                <div className="timer-time">{formatTime(timeLeft)}</div>
+                <button className="btn btn-danger" onClick={stopTimer}>
+                  Остановить таймер
+                </button>
+              </>
+            ) : (
+              <button 
+                className="btn btn-success" 
+                onClick={startTimer}
+                disabled={selectedMinutes === 0}
+              >
+                Запустить таймер на {selectedMinutes} мин
+              </button>
+            )}
+          </div>
         </div>
-        <div className="timer-display">
-          {timerActive 
-            ? `Осталось: ${helpers.formatTime(timeLeft)}` 
-            : `Готов к запуску: ${selectedMinutes} мин`
-          }
-        </div>
-        <div className="timer-controls">
-          <button 
-            type="button" 
-            className="btn btn-success" 
-            onClick={startTimer}
-            disabled={timerActive}
-          >
-            Запустить таймер
-          </button>
-          <button 
-            type="button" 
-            className="btn btn-secondary" 
-            onClick={stopTimer}
-            disabled={!timerActive}
-          >
-            Остановить
-          </button>
-        </div>
-      </div>
+      )}
     </div>
   );
 };
