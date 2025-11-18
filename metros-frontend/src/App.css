@@ -663,55 +663,7 @@ select:focus, input:focus {
 }
 
 /* ===== ТАЙМЕРЫ ===== */
-/* Timer Component Styles */
-.timer-component {
-  margin: 20px 0;
-  padding: 15px;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  background: #f9f9f9;
-}
 
-.timer-options {
-  margin-bottom: 15px;
-}
-
-.timer-buttons {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 8px;
-}
-
-.timer-btn {
-  padding: 8px 12px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  background: white;
-  cursor: pointer;
-}
-
-.timer-btn.active {
-  background: #007bff;
-  color: white;
-  border-color: #007bff;
-}
-
-.timer-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.timer-display {
-  text-align: center;
-}
-
-.timer-time {
-  font-size: 24px;
-  font-weight: bold;
-  margin: 10px 0;
-  color: #333;
-}
 .compact-timer {
     background: #f8f9fa;
     border: 2px solid #0057b8;
