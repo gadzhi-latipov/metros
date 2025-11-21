@@ -38,52 +38,18 @@ export const App = () => {
   const userIdRef = useRef(null);
   const globalRefreshIntervalRef = useRef(null);
 
-// Восстановление состояний из localStorage и проверка активной сессии
-useEffect(() => {
-  const savedPosition = localStorage.getItem('selectedPosition');
-  const savedMood = localStorage.getItem('selectedMood');
-  const savedStation = localStorage.getItem('selectedStation');
-  const savedTimer = localStorage.getItem('selectedTimerMinutes');
-  const savedUserId = localStorage.getItem('userId');
-  const savedScreen = localStorage.getItem('currentScreen');
-  
-  if (savedPosition) setSelectedPosition(savedPosition);
-  if (savedMood) setSelectedMood(savedMood);
-  if (savedStation) setCurrentSelectedStation(savedStation);
-  if (savedTimer) setSelectedMinutes(parseInt(savedTimer));
-  
-  // Восстанавливаем userId если есть
-  if (savedUserId) {
-    userIdRef.current = savedUserId;
-  }
-  
-  // При загрузке приложения всегда сбрасываем статус подключения
-  // и переводим пользователя в режим ожидания
-  if (savedUserId) {
-    console.log('🔄 Восстановление сессии пользователя:', savedUserId);
+  // Восстановление состояний из localStorage
+  useEffect(() => {
+    const savedPosition = localStorage.getItem('selectedPosition');
+    const savedMood = localStorage.getItem('selectedMood');
+    const savedStation = localStorage.getItem('selectedStation');
+    const savedTimer = localStorage.getItem('selectedTimerMinutes');
     
-    // Автоматически переводим в режим ожидания при загрузке
-    setTimeout(async () => {
-      try {
-        await api.updateUser(savedUserId, { 
-          status: 'Ожидание',
-          is_waiting: true,
-          is_connected: false,
-          station: ''
-        });
-        console.log('✅ Пользователь переведен в режим ожидания');
-      } catch (error) {
-        console.error('❌ Ошибка сброса статуса:', error);
-      }
-    }, 1000);
-    
-    // Устанавливаем экран ожидания независимо от сохраненного состояния
-    setCurrentScreen('waiting');
-  } else {
-    // Если пользователь новый, показываем setup
-    setCurrentScreen('setup');
-  }
-}, []);
+    if (savedPosition) setSelectedPosition(savedPosition);
+    if (savedMood) setSelectedMood(savedMood);
+    if (savedStation) setCurrentSelectedStation(savedStation);
+    if (savedTimer) setSelectedMinutes(parseInt(savedTimer));
+  }, []);
 
   // Обработка онлайн/офлайн статуса
   useEffect(() => {
@@ -257,30 +223,6 @@ useEffect(() => {
   }
 }, [selectedPosition, selectedMood]);
 
-// Обработчик закрытия страницы
-useEffect(() => {
-  const handleBeforeUnload = async () => {
-    if (userIdRef.current) {
-      // Отправляем запрос на выход при закрытии страницы
-      try {
-        await api.updateUser(userIdRef.current, { 
-          is_waiting: false,
-          is_connected: false,
-          station: '',
-          online: false
-        });
-      } catch (error) {
-        // Игнорируем ошибки при закрытии страницы
-      }
-    }
-  };
-
-  window.addEventListener('beforeunload', handleBeforeUnload);
-  
-  return () => {
-    window.removeEventListener('beforeunload', handleBeforeUnload);
-  };
-}, []);
 
   const handleEnterWaitingRoom = async () => {
     console.log('🚪 === НАЧАЛО handleEnterWaitingRoom ===');
@@ -311,8 +253,7 @@ useEffect(() => {
       
       if (createdUser) {
         userIdRef.current = createdUser.id;
-         // Сохраняем userId в localStorage
-      localStorage.setItem('userId', createdUser.id);
+        
         setTimeout(() => {
           setCurrentScreen('waiting');
         }, 100);
@@ -414,27 +355,24 @@ useEffect(() => {
   }
 };
 
- const handleLeaveGroup = async () => {
-  if (userIdRef.current) {
-    try {
-      await api.updateUser(userIdRef.current, { 
-        status: 'Ожидание',
-        is_waiting: true,
-        is_connected: false,
-        station: ''
-      });
-      console.log('✅ Пользователь вышел из группы');
-    } catch (error) {
-      console.error('Ошибка при обновлении пользователя:', error);
+  const handleLeaveGroup = async () => {
+    if (userIdRef.current) {
+      try {
+        await api.updateUser(userIdRef.current, { 
+          status: 'Ожидание',
+          is_waiting: true,
+          is_connected: false,
+        });
+      } catch (error) {
+        console.error('Ошибка при обновлении пользователя:', error);
+      }
     }
-  }
-  
-  setCurrentGroup(null);
-  setCurrentScreen('waiting');
-  setSelectedPosition('');
-  setSelectedMood('');
-  localStorage.setItem('currentScreen', 'waiting');
-};
+    
+    setCurrentGroup(null);
+    setCurrentScreen('waiting');
+    setSelectedPosition('');
+    setSelectedMood('');
+  };
 
 
   const generateUserStatus = () => {
@@ -517,57 +455,32 @@ useEffect(() => {
     }
   };
 
-const improvedPingActivity = async () => {
-  if (!userIdRef.current) return false;
-  
-  const now = Date.now();
-  if (now - lastPingTime < PING_INTERVAL) return false;
-  
-  try {
-    // Обновляем онлайн статус и проверяем текущий экран
-    const updateData = { 
-      online: true,
-      // Если пользователь не на joined экране, сбрасываем подключение
-      is_connected: currentScreen === 'joined'
-    };
+  const improvedPingActivity = async () => {
+    if (!userIdRef.current) return false;
     
-    await api.pingActivity(userIdRef.current, updateData);
-    setLastPingTime(now);
-    return true;
-  } catch (error) {
-    console.error('Ошибка пинга активности:', error);
-    return false;
-  }
-};
+    const now = Date.now();
+    if (now - lastPingTime < PING_INTERVAL) return false;
+    
+    try {
+      await api.pingActivity(userIdRef.current);
+      setLastPingTime(now);
+      return true;
+    } catch (error) {
+      console.error('Ошибка пинга активности:', error);
+      return false;
+    }
+  };
 
-const showSetup = () => {
-  // При переходе на setup сбрасываем подключение
-  if (userIdRef.current && currentScreen === 'joined') {
-    handleLeaveGroup();
-  }
-  setCurrentScreen('setup');
-  localStorage.setItem('currentScreen', 'setup');
-};
-
-const showWaitingRoom = () => {
-  if (!userIdRef.current) {
-    bridge.send("VKWebAppShowSnackbar", {
-      text: 'Сначала создайте профиль'
-    });
-    return showSetup();
-  }
-  
-  // При переходе на waiting сбрасываем подключение если были в joined
-  if (currentScreen === 'joined') {
-    handleLeaveGroup();
-  }
-  
-  setCurrentScreen('waiting');
-  localStorage.setItem('currentScreen', 'waiting');
-};
-
-
-
+  const showSetup = () => setCurrentScreen('setup');
+  const showWaitingRoom = () => {
+    if (!userIdRef.current) {
+      bridge.send("VKWebAppShowSnackbar", {
+        text: 'Сначала создайте профиль'
+      });
+      return showSetup();
+    }
+    setCurrentScreen('waiting');
+  };
   const showJoinedRoom = () => {
     if (!currentGroup) {
       bridge.send("VKWebAppShowSnackbar", {
