@@ -566,22 +566,7 @@ const showWaitingRoom = () => {
   localStorage.setItem('currentScreen', 'waiting');
 };
 
-return () => {
-  cleanupGlobalRefresh();
-  
-  if (globalRefreshIntervalRef.current) {
-    clearInterval(globalRefreshIntervalRef.current);
-  }
-  if (userIdRef.current) {
-    // При размонтировании компонента выходим из всех комнат
-    api.updateUser(userIdRef.current, { 
-      is_waiting: false,
-      is_connected: false,
-      station: '',
-      online: false
-    }).catch(console.error);
-  }
-};
+
 
   const showJoinedRoom = () => {
     if (!currentGroup) {
