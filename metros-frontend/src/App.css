@@ -601,20 +601,40 @@ select:focus, input:focus {
     justify-content: center;
     min-height: 200px;
 }
-
-.loading-spinner {
-    width: 30px;
-    height: 30px;
-    border: 3px solid #f3f3f3;
-    border-top: 3px solid #0057b8;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
+/* Нейроморфный лоадер */
+            .neuromorphic-circle {
+                width: 80px;
+                height: 80px;
+                border-radius: 50%;
+                background: #0a0a0a;
+                position: relative;
+                box-shadow: 
+                    -8px -8px 16px rgba(255, 255, 255, 0.05),
+                    8px 8px 16px rgba(0, 0, 0, 0.5);
+            }
+            
+            .neuromorphic-circle::before {
+                content: '';
+                position: absolute;
+                top: 5px;
+                left: 5px;
+                right: 5px;
+                bottom: 5px;
+                border-radius: 50%;
+                box-shadow: 
+                    inset -4px -4px 8px rgba(255, 255, 255, 0.05),
+                    inset 4px 4px 8px rgba(0, 0, 0, 0.5);
+                border: 2px solid transparent;
+                background: 
+                    linear-gradient(#0a0a0a, #0a0a0a) padding-box,
+                    conic-gradient(from 0deg, #00ffff, #ff00ff, #ffff00, #00ffff) border-box;
+                animation: neuromorphic-rotate 2s linear infinite;
+            }
+            
+            @keyframes neuromorphic-rotate {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
 
 /* ===== СПИСКИ ПОЛЬЗОВАТЕЛЕЙ ===== */
 .users-list-section {
