@@ -603,7 +603,7 @@ useEffect(() => {
       {isLoading && (
         // <!-- 1. Нейроморфный лоадер -->
         <div class="loader-card">
-            <h3 class="loader-title">Нейроморфный лоадер</h3>
+            <h3 class="loader-title"></h3>
             <div class="loader-box">
                 <div class="loader-1" id="neuromorphic-loader">
                     <div class="neuromorphic-circle"></div>
