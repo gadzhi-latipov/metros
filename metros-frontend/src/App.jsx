@@ -721,7 +721,7 @@ const handleEnterWaitingRoom = async () => {
               <p>Укажите ваш город и пол</p>
               {/* ДОБАВЛЯЕМ ПОЛЕ НИКНЕЙМА */}
     <div className="form-group">
-      <label htmlFor="nickname-input">Ваш никнейм *</label>
+      <label htmlFor="nickname-input">Укажите Ваш никнейм *</label>
       <input 
         type="text" 
         id="nickname-input" 
@@ -734,7 +734,7 @@ const handleEnterWaitingRoom = async () => {
         required 
       />
       <small className="field-hint">
-        Это имя будет отображаться другим участникам
+        Это имя будет видно другим участникам
       </small>
     </div>
               <div className="form-group">
