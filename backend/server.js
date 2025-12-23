@@ -168,3 +168,22 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🌐 CORS enabled for: frommetro.vercel.app`);
 });
+// интервал очистки
+setInterval(async () => {
+  try {
+    const inactiveTime = new Date(Date.now() - 5 * 60 * 1000); // 5 минут
+    await User.updateMany(
+      { 
+        last_ping: { $lt: inactiveTime },
+        is_connected: true 
+      },
+      { 
+        is_connected: false,
+        station: '',
+        is_waiting: false 
+      }
+    );
+  } catch (error) {
+    console.error('Ошибка очистки неактивных пользователей:', error);
+  }
+}, 60000); // Каждую минуту

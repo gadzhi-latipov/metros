@@ -38,21 +38,108 @@ export const App = () => {
   const userIdRef = useRef(null);
   const globalRefreshIntervalRef = useRef(null);
 
-  // Восстановление состояний из localStorage
+// Восстановление состояний из localStorage
 useEffect(() => {
   const savedPosition = localStorage.getItem('selectedPosition');
   const savedMood = localStorage.getItem('selectedMood');
   const savedStation = localStorage.getItem('selectedStation');
   const savedTimer = localStorage.getItem('selectedTimerMinutes');
-  const savedNickname = localStorage.getItem('nickname'); // ← НОВОЕ
+  const savedNickname = localStorage.getItem('nickname');
+  const savedUserId = localStorage.getItem('userId');
+  const savedScreen = localStorage.getItem('currentScreen');
+  const savedGroup = localStorage.getItem('currentGroup');
+  const savedClothingColor = localStorage.getItem('clothingColor');
+  const savedWagonNumber = localStorage.getItem('wagonNumber');
   
   if (savedPosition) setSelectedPosition(savedPosition);
   if (savedMood) setSelectedMood(savedMood);
   if (savedStation) setCurrentSelectedStation(savedStation);
   if (savedTimer) setSelectedMinutes(parseInt(savedTimer));
-  if (savedNickname) setNickname(savedNickname); // ← Восстанавливаем никнейм
+  if (savedNickname) setNickname(savedNickname);
+  if (savedClothingColor) setClothingColor(savedClothingColor);
+  if (savedWagonNumber) setWagonNumber(savedWagonNumber);
+  
+  // Восстанавливаем состояние группы
+  if (savedGroup) {
+    try {
+      const groupData = JSON.parse(savedGroup);
+      setCurrentGroup(groupData);
+    } catch (error) {
+      console.error('Ошибка восстановления группы:', error);
+    }
+  }
+  
+  // Восстанавливаем userId если есть
+  if (savedUserId) {
+    userIdRef.current = savedUserId;
+    
+    // Если был в joined, восстанавливаем соединение
+    if (savedScreen === 'joined' && savedGroup) {
+      console.log('🔄 Восстановление сессии пользователя в комнате станции');
+      
+      // Устанавливаем экран joined
+      setTimeout(() => {
+        setCurrentScreen('joined');
+        
+        // Восстанавливаем подключение к станции
+        setTimeout(async () => {
+          try {
+            await api.updateUser(savedUserId, { 
+              is_waiting: false,
+              is_connected: true,
+              station: JSON.parse(savedGroup).station,
+              online: true
+            });
+            console.log('✅ Сессия восстановлена');
+            
+            // Загружаем актуальные данные
+            loadGroupMembers();
+            loadRequests(true);
+          } catch (error) {
+            console.error('❌ Ошибка восстановления сессии:', error);
+            // Если не удалось восстановить, переводим в ожидание
+            setCurrentScreen('waiting');
+            localStorage.setItem('currentScreen', 'waiting');
+          }
+        }, 500);
+      }, 100);
+    } else {
+      // Иначе показываем waiting
+      setCurrentScreen('waiting');
+    }
+  } else {
+    // Если пользователь новый, показываем setup
+    setCurrentScreen('setup');
+  }
 }, []);
 
+// Сохраняем состояние при изменении экрана
+useEffect(() => {
+  localStorage.setItem('currentScreen', currentScreen);
+}, [currentScreen]);
+
+// Сохраняем состояние группы
+useEffect(() => {
+  if (currentGroup) {
+    localStorage.setItem('currentGroup', JSON.stringify(currentGroup));
+  } else {
+    localStorage.removeItem('currentGroup');
+  }
+}, [currentGroup]);
+
+// Сохраняем цвет одежды и вагон
+useEffect(() => {
+  localStorage.setItem('clothingColor', clothingColor);
+}, [clothingColor]);
+
+useEffect(() => {
+  localStorage.setItem('wagonNumber', wagonNumber);
+}, [wagonNumber]);
+
+// Сохраняем никнейм
+useEffect(() => {
+  localStorage.setItem('nickname', nickname);
+}, [nickname]);
 
 // В App.jsx добавьте:
 useEffect(() => {
@@ -386,18 +473,18 @@ const handleEnterWaitingRoom = async () => {
     return;
   }
 
-  
-  // Если все проверки пройдены
+   // Если все проверки пройдены
   if (userIdRef.current) {
     setIsLoading(true);
     try {
       await api.updateUser(userIdRef.current, {
         station: currentSelectedStation,
         wagon: wagonNumber,
-        color: clothingColor.trim(), // убираем лишние пробелы
-         name: nickname.trim(), // ← ОБНОВЛЯЕМ имя с никнеймом
+        color: clothingColor.trim(),
+        name: nickname.trim(),
         is_waiting: false,
         is_connected: true,
+        online: true, // ← Устанавливаем онлайн статус
         status: 'Выбрал станцию: ' + currentSelectedStation
       });
 
@@ -407,11 +494,17 @@ const handleEnterWaitingRoom = async () => {
       });
       
       if (result && result.success) {
-        setCurrentGroup({
+        const groupData = {
           station: currentSelectedStation,
           users: result.users || []
-        });
+        };
+        
+        setCurrentGroup(groupData);
         setCurrentScreen('joined');
+        
+        // Сохраняем в localStorage
+        localStorage.setItem('currentGroup', JSON.stringify(groupData));
+        localStorage.setItem('currentScreen', 'joined');
         
         // Показываем успешное уведомление
         bridge.send("VKWebAppShowSnackbar", {
@@ -434,7 +527,7 @@ const handleEnterWaitingRoom = async () => {
   }
 };
 
- const handleLeaveGroup = async () => {
+const handleLeaveGroup = async () => {
   if (userIdRef.current) {
     try {
       await api.updateUser(userIdRef.current, { 
@@ -453,10 +546,53 @@ const handleEnterWaitingRoom = async () => {
   setCurrentScreen('waiting');
   setSelectedPosition('');
   setSelectedMood('');
-  // Никнейм не очищаем - он сохраняется для будущих сессий
+  
+  // Очищаем только данные группы, но сохраняем другие настройки
+  localStorage.removeItem('currentGroup');
   localStorage.setItem('currentScreen', 'waiting');
+  
+  // Показываем уведомление
+  bridge.send("VKWebAppShowSnackbar", {
+    text: 'Вы вышли из комнаты станции'
+  });
 };
-
+// Обработка онлайн/офлайн статуса с восстановлением
+useEffect(() => {
+  const handleOnline = async () => {
+    console.log('🌐 Интернет восстановлен');
+    setIsOnline(true);
+    
+    // Если был в joined, восстанавливаем сессию
+    if (currentScreen === 'joined' && currentGroup && userIdRef.current) {
+      try {
+        await api.updateUser(userIdRef.current, {
+          online: true,
+          is_connected: true
+        });
+        console.log('✅ Сессия восстановлена после потери соединения');
+        
+        // Обновляем данные
+        await loadGroupMembers();
+        await loadRequests(true);
+      } catch (error) {
+        console.error('❌ Ошибка восстановления сессии:', error);
+      }
+    }
+  };
+  
+  const handleOffline = async () => {
+    console.log('🌐 Потеряно интернет-соединение');
+    setIsOnline(false);
+  };
+  
+  window.addEventListener('online', handleOnline);
+  window.addEventListener('offline', handleOffline);
+  
+  return () => {
+    window.removeEventListener('online', handleOnline);
+    window.removeEventListener('offline', handleOffline);
+  };
+}, [currentScreen, currentGroup]);
   const generateUserStatus = () => {
     const positionPart = selectedPosition ? selectedPosition : '';
     const moodPart = selectedMood ? selectedMood : '';
@@ -537,22 +673,85 @@ const handleEnterWaitingRoom = async () => {
     }
   };
 
-  const improvedPingActivity = async () => {
-    if (!userIdRef.current) return false;
+ const improvedPingActivity = async () => {
+  if (!userIdRef.current) return false;
+  
+  const now = Date.now();
+  if (now - lastPingTime < PING_INTERVAL) return false;
+  
+  try {
+    // Обновляем онлайн статус с учетом текущего экрана
+    const updateData = { 
+      online: true,
+      is_connected: currentScreen === 'joined',
+      // Если пользователь в joined, сохраняем станцию
+      ...(currentScreen === 'joined' && currentGroup && { 
+        station: currentGroup.station 
+      })
+    };
     
-    const now = Date.now();
-    if (now - lastPingTime < PING_INTERVAL) return false;
+    await api.pingActivity(userIdRef.current, updateData);
+    setLastPingTime(now);
     
-    try {
-      await api.pingActivity(userIdRef.current);
-      setLastPingTime(now);
-      return true;
-    } catch (error) {
-      console.error('Ошибка пинга активности:', error);
-      return false;
+    // Обновляем данные если в joined
+    if (currentScreen === 'joined') {
+      await loadGroupMembers();
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Ошибка пинга активности:', error);
+    return false;
+  }
+};
+// Обработчик закрытия страницы
+useEffect(() => {
+  const handleBeforeUnload = async (event) => {
+    if (userIdRef.current) {
+      // Если пользователь был в joined, НЕ выходим из комнаты
+      if (currentScreen === 'joined' && currentGroup) {
+        console.log('🔄 Сохранение сессии при закрытии страницы');
+        
+        // Пытаемся отправить последнее обновление статуса
+        try {
+          await api.updateUser(userIdRef.current, { 
+            online: false, // Устанавливаем offline
+            last_seen: new Date().toISOString()
+          });
+        } catch (error) {
+          // Игнорируем ошибки при закрытии страницы
+        }
+      } else {
+        // Если не в joined, выходим полностью
+        try {
+          await api.updateUser(userIdRef.current, { 
+            is_waiting: false,
+            is_connected: false,
+            station: '',
+            online: false
+          });
+        } catch (error) {
+          // Игнорируем ошибки при закрытии страницы
+        }
+      }
     }
   };
 
+  window.addEventListener('beforeunload', handleBeforeUnload);
+  
+  return () => {
+    window.removeEventListener('beforeunload', handleBeforeUnload);
+  };
+}, [currentScreen, currentGroup]);
+
+{isLoading && currentScreen === 'joined' && (
+  <div className="restoring-session">
+    <div className="restoring-spinner"></div>
+    <div>Восстановление сессии...</div>
+  </div>
+)}
+
+// индикатор восстановления сессии
   const showSetup = () => setCurrentScreen('setup');
   const showWaitingRoom = () => {
     if (!userIdRef.current) {
@@ -563,6 +762,9 @@ const handleEnterWaitingRoom = async () => {
     }
     setCurrentScreen('waiting');
   };
+
+
+  
   const showJoinedRoom = () => {
     if (!currentGroup) {
       bridge.send("VKWebAppShowSnackbar", {
