@@ -50,7 +50,55 @@ export const App = () => {
     if (savedStation) setCurrentSelectedStation(savedStation);
     if (savedTimer) setSelectedMinutes(parseInt(savedTimer));
   }, []);
-
+// В App.jsx добавьте:
+useEffect(() => {
+  const realtimePollingInterval = setInterval(async () => {
+    if (currentScreen === 'joined' && currentGroup) {
+      try {
+        // Загружаем актуальных участников
+        const users = await api.getUsers();
+        const freshGroupMembers = users.filter(user => 
+          user.station === currentGroup.station && 
+          user.is_connected === true
+        );
+        
+        // Обновляем только если есть изменения
+        setGroupMembers(prevMembers => {
+          const prevIds = prevMembers.map(u => u.id).sort();
+          const newIds = freshGroupMembers.map(u => u.id).sort();
+          
+          if (JSON.stringify(prevIds) !== JSON.stringify(newIds)) {
+            return freshGroupMembers;
+          }
+          
+          // Проверяем изменения статусов
+          const hasStatusChanges = prevMembers.some(prevUser => {
+            const newUser = freshGroupMembers.find(u => u.id === prevUser.id);
+            return newUser && (
+              newUser.status !== prevUser.status ||
+              newUser.position !== prevUser.position ||
+              newUser.mood !== prevUser.mood
+            );
+          });
+          
+          if (hasStatusChanges) {
+            return freshGroupMembers;
+          }
+          
+          return prevMembers;
+        });
+        
+        // Обновляем статистику станций
+        await loadStationsMap();
+        
+      } catch (error) {
+        console.error('Ошибка обновления данных:', error);
+      }
+    }
+  }, 2000); // Опрос каждые 2 секунды
+  
+  return () => clearInterval(realtimePollingInterval);
+}, [currentScreen, currentGroup]);
   // Обработка онлайн/офлайн статуса
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
