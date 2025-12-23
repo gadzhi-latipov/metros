@@ -1203,3 +1203,34 @@ footer {
   margin-top: 4px;
   display: block;
 }
+/* Стили для поля никнейма */
+#nickname-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-size: 14px;
+  margin-top: 5px;
+  transition: border-color 0.3s;
+}
+
+#nickname-input:focus {
+  outline: none;
+  border-color: #007bff;
+}
+
+#nickname-input::placeholder {
+  color: #999;
+}
+
+/* Адаптация формы */
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 500;
+  color: #333;
+}

@@ -210,13 +210,7 @@ export const api = {
 };
 
 export const helpers = {
-  getRandomName: (gender) => {
-    const maleNames = ['Иван-Царевич', 'Кощей Бессмертный', 'Добрыня Никитич', 'Леший', 'Водяной', 'Бабай', 'Соловей-Разбойник', 'Змей Горыныч'];
-    const femaleNames = ['Василиса Премудрая', 'Баба Яга', 'Царевна-Лягушка', 'Снегурочка', 'Марья-Искусница', 'Аленушка', 'Кикимора', 'Русалка'];
-
-    const names = gender === 'male' ? maleNames : femaleNames;
-    return names[Math.floor(Math.random() * names.length)];
-  },
+  
 
   getRandomColor: () => {
     const colors = ['#007bff', '#28a745', '#dc3545', '#ffc107', '#6f42c1', '#fd7e14', '#20c997'];

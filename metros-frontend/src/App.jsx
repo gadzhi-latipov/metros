@@ -18,6 +18,7 @@ export const App = () => {
   const [selectedMood, setSelectedMood] = useState('');
   const [wagonNumber, setWagonNumber] = useState('');
   const [clothingColor, setClothingColor] = useState('');
+  const [nickname, setNickname] = useState(''); // ← НОВОЕ: поле для никнейма
   const [timerActive, setTimerActive] = useState(false);
   const [selectedMinutes, setSelectedMinutes] = useState(5);
   const [currentSelectedStation, setCurrentSelectedStation] = useState(null);
@@ -34,22 +35,25 @@ export const App = () => {
   const CACHE_DURATION = 10000;
   const PING_INTERVAL = 15000;
 
-
   const userIdRef = useRef(null);
   const globalRefreshIntervalRef = useRef(null);
 
   // Восстановление состояний из localStorage
-  useEffect(() => {
-    const savedPosition = localStorage.getItem('selectedPosition');
-    const savedMood = localStorage.getItem('selectedMood');
-    const savedStation = localStorage.getItem('selectedStation');
-    const savedTimer = localStorage.getItem('selectedTimerMinutes');
-    
-    if (savedPosition) setSelectedPosition(savedPosition);
-    if (savedMood) setSelectedMood(savedMood);
-    if (savedStation) setCurrentSelectedStation(savedStation);
-    if (savedTimer) setSelectedMinutes(parseInt(savedTimer));
-  }, []);
+useEffect(() => {
+  const savedPosition = localStorage.getItem('selectedPosition');
+  const savedMood = localStorage.getItem('selectedMood');
+  const savedStation = localStorage.getItem('selectedStation');
+  const savedTimer = localStorage.getItem('selectedTimerMinutes');
+  const savedNickname = localStorage.getItem('nickname'); // ← НОВОЕ
+  
+  if (savedPosition) setSelectedPosition(savedPosition);
+  if (savedMood) setSelectedMood(savedMood);
+  if (savedStation) setCurrentSelectedStation(savedStation);
+  if (savedTimer) setSelectedMinutes(parseInt(savedTimer));
+  if (savedNickname) setNickname(savedNickname); // ← Восстанавливаем никнейм
+}, []);
+
+
 // В App.jsx добавьте:
 useEffect(() => {
   const realtimePollingInterval = setInterval(async () => {
@@ -272,50 +276,69 @@ useEffect(() => {
 }, [selectedPosition, selectedMood]);
 
 
-  const handleEnterWaitingRoom = async () => {
-    console.log('🚪 === НАЧАЛО handleEnterWaitingRoom ===');
+const handleEnterWaitingRoom = async () => {
+  console.log('🚪 === НАЧАЛО handleEnterWaitingRoom ===');
+  
+  // Проверка обязательных полей
+  if (!nickname || nickname.trim() === '') {
+    bridge.send("VKWebAppShowSnackbar", {
+      text: '❌ Пожалуйста, введите ваш никнейм'
+    });
     
-    setIsLoading(true);
-
-    try {
-      const randomName = helpers.getRandomName(selectedGender);
+    // Визуальное выделение поля
+    const nicknameInput = document.getElementById('nickname-input');
+    if (nicknameInput) {
+      nicknameInput.style.border = '2px solid #ff4444';
+      nicknameInput.style.backgroundColor = '#fff5f5';
       
-      const userData = {
-        name: randomName,
-        station: '',
-        wagon: '',
-        color: '',
-        colorCode: helpers.getRandomColor(),
-        status: 'В режиме ожидания',
-        timer: "00:00",
-        online: true,
-        city: selectedCity,
-        gender: selectedGender,
-        position: '',
-        mood: '',
-        isWaiting: true,
-        isConnected: false
-      };
-
-      const createdUser = await api.createUser(userData);
-      
-      if (createdUser) {
-        userIdRef.current = createdUser.id;
-        
-        setTimeout(() => {
-          setCurrentScreen('waiting');
-        }, 100);
-
-        await loadStationsMap();
-        await loadRequests();
-      }
-    } catch (error) {
-      console.error('❌ ОШИБКА в handleEnterWaitingRoom:', error);
-    } finally {
-      setIsLoading(false);
+      setTimeout(() => {
+        nicknameInput.style.border = '';
+        nicknameInput.style.backgroundColor = '';
+      }, 3000);
     }
-  };
+    
+    return;
+  }
+  
+  setIsLoading(true);
 
+  try {
+    // Теперь используем введенный пользователем никнейм
+    const userData = {
+      name: nickname.trim(), // ← ИСПОЛЬЗУЕМ никнейм пользователя
+      station: '',
+      wagon: '',
+      color: '',
+      colorCode: helpers.getRandomColor(),
+      status: 'В режиме ожидания',
+      timer: "00:00",
+      online: true,
+      city: selectedCity,
+      gender: selectedGender,
+      position: '',
+      mood: '',
+      isWaiting: true,
+      isConnected: false
+    };
+
+    const createdUser = await api.createUser(userData);
+    
+    if (createdUser) {
+      userIdRef.current = createdUser.id;
+      
+      setTimeout(() => {
+        setCurrentScreen('waiting');
+      }, 100);
+
+      await loadStationsMap();
+      await loadRequests();
+    }
+  } catch (error) {
+    console.error('❌ ОШИБКА в handleEnterWaitingRoom:', error);
+  } finally {
+    setIsLoading(false);
+  }
+};
   const handleConfirmStation = async () => {
   // Проверка на заполнение обязательного поля
   if (!clothingColor || clothingColor.trim() === '') {
@@ -338,7 +361,13 @@ useEffect(() => {
     
     return;
   }
-  
+    // Проверка никнейма (дополнительная проверка)
+  if (!nickname || nickname.trim() === '') {
+    bridge.send("VKWebAppShowSnackbar", {
+      text: '❌ Пожалуйста, введите ваш никнейм'
+    });
+    return;
+  }
   // Проверка выбора станции
   if (!currentSelectedStation) {
     bridge.send("VKWebAppShowSnackbar", {
@@ -356,6 +385,7 @@ useEffect(() => {
     
     return;
   }
+
   
   // Если все проверки пройдены
   if (userIdRef.current) {
@@ -365,6 +395,7 @@ useEffect(() => {
         station: currentSelectedStation,
         wagon: wagonNumber,
         color: clothingColor.trim(), // убираем лишние пробелы
+         name: nickname.trim(), // ← ОБНОВЛЯЕМ имя с никнеймом
         is_waiting: false,
         is_connected: true,
         status: 'Выбрал станцию: ' + currentSelectedStation
@@ -403,25 +434,28 @@ useEffect(() => {
   }
 };
 
-  const handleLeaveGroup = async () => {
-    if (userIdRef.current) {
-      try {
-        await api.updateUser(userIdRef.current, { 
-          status: 'Ожидание',
-          is_waiting: true,
-          is_connected: false,
-        });
-      } catch (error) {
-        console.error('Ошибка при обновлении пользователя:', error);
-      }
+ const handleLeaveGroup = async () => {
+  if (userIdRef.current) {
+    try {
+      await api.updateUser(userIdRef.current, { 
+        status: 'Ожидание',
+        is_waiting: true,
+        is_connected: false,
+        station: ''
+      });
+      console.log('✅ Пользователь вышел из группы');
+    } catch (error) {
+      console.error('Ошибка при обновлении пользователя:', error);
     }
-    
-    setCurrentGroup(null);
-    setCurrentScreen('waiting');
-    setSelectedPosition('');
-    setSelectedMood('');
-  };
-
+  }
+  
+  setCurrentGroup(null);
+  setCurrentScreen('waiting');
+  setSelectedPosition('');
+  setSelectedMood('');
+  // Никнейм не очищаем - он сохраняется для будущих сессий
+  localStorage.setItem('currentScreen', 'waiting');
+};
 
   const generateUserStatus = () => {
     const positionPart = selectedPosition ? selectedPosition : '';
@@ -685,7 +719,24 @@ useEffect(() => {
                 <button className="nav-btn" onClick={showJoinedRoom}>3. Комната станции</button>
               </div>
               <p>Укажите ваш город и пол</p>
-              
+              {/* ДОБАВЛЯЕМ ПОЛЕ НИКНЕЙМА */}
+    <div className="form-group">
+      <label htmlFor="nickname-input">Ваш никнейм *</label>
+      <input 
+        type="text" 
+        id="nickname-input" 
+        placeholder="Придумайте уникальное имя" 
+        value={nickname}
+        onChange={(e) => {
+          setNickname(e.target.value);
+          localStorage.setItem('nickname', e.target.value);
+        }}
+        required 
+      />
+      <small className="field-hint">
+        Это имя будет отображаться другим участникам
+      </small>
+    </div>
               <div className="form-group">
                 <label>Выберите город:</label>
                 <div className="city-options">
