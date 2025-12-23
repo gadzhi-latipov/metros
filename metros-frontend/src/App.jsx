@@ -792,7 +792,7 @@ useEffect(() => {
                     <option value="8">8</option>
                   </select>
                 </div>
-                
+                {/* Колонка ввода цвета верхней одежды */}
                 <div className="form-group">
   <label htmlFor="color-select">Цвет верхней одежды или стиль *</label>
   <input 
@@ -801,6 +801,19 @@ useEffect(() => {
     placeholder="Например: черный верх, синий низ, очки, шапка" 
     value={clothingColor}
     onChange={(e) => setClothingColor(e.target.value)}
+    required 
+  />
+  <small className="field-hint">Это поле обязательно для заполнения</small>
+</div>
+
+{/* Колонка ввода никнейма */}
+<div className="form-group">
+  <label htmlFor="nick-select">Никнейм *</label>
+  <input 
+    type="text" 
+    id="nick-select" 
+    value={selectNick}
+    onChange={(e) => setNickname(e.target.value)}
     required 
   />
   <small className="field-hint">Это поле обязательно для заполнения</small>
