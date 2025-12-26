@@ -39,7 +39,9 @@ export const App = () => {
   const [isOnline, setIsOnline] = useState(true);
   const [deviceId, setDeviceId] = useState('');
   const [isSessionRestoring, setIsSessionRestoring] = useState(false);
-  const [nicknameError, setNicknameError] = useState(false); // НОВОЕ: состояние ошибки никнейма
+  const [nicknameError, setNicknameError] = useState(false);
+  const [clothingColorError, setClothingColorError] = useState(false); // НОВОЕ: ошибка цвета одежды
+  const [stationError, setStationError] = useState(false); // НОВОЕ: ошибка выбора станции
   
   const CACHE_DURATION = 10000;
   const PING_INTERVAL = 15000;
@@ -48,7 +50,9 @@ export const App = () => {
   const globalRefreshIntervalRef = useRef(null);
   const sessionIdRef = useRef('');
   const vkUserIdRef = useRef(null);
-  const nicknameInputRef = useRef(null); // НОВОЕ: ссылка на поле ввода
+  const nicknameInputRef = useRef(null);
+  const clothingColorInputRef = useRef(null); // НОВОЕ: ссылка на поле цвета одежды
+  const metroMapRef = useRef(null); // НОВОЕ: ссылка на карту станций
 
   // Генерация уникального ID сессии
   const generateSessionId = () => {
@@ -515,6 +519,68 @@ export const App = () => {
     return true;
   };
 
+  // НОВОЕ: Валидация цвета одежды
+  const validateClothingColor = () => {
+    const trimmedColor = clothingColor.trim();
+    if (!trimmedColor) {
+      setClothingColorError(true);
+      
+      // Визуальное выделение поля
+      if (clothingColorInputRef.current) {
+        clothingColorInputRef.current.style.border = '2px solid #ff4444';
+        clothingColorInputRef.current.style.backgroundColor = '#fff5f5';
+        clothingColorInputRef.current.style.boxShadow = '0 0 0 1px #ff4444';
+        
+        // Фокусировка на поле
+        clothingColorInputRef.current.focus();
+      }
+      
+      // Уведомление VK
+      bridge.send("VKWebAppShowSnackbar", {
+        text: '❌ Пожалуйста, укажите цвет верхней одежды или стиль'
+      });
+      
+      return false;
+    }
+    
+    setClothingColorError(false);
+    if (clothingColorInputRef.current) {
+      clothingColorInputRef.current.style.border = '';
+      clothingColorInputRef.current.style.backgroundColor = '';
+      clothingColorInputRef.current.style.boxShadow = '';
+    }
+    
+    return true;
+  };
+
+  // НОВОЕ: Валидация выбора станции
+  const validateStation = () => {
+    if (!currentSelectedStation) {
+      setStationError(true);
+      
+      // Визуальное выделение карты станций
+      if (metroMapRef.current) {
+        metroMapRef.current.style.border = '2px solid #ff4444';
+        metroMapRef.current.style.boxShadow = '0 0 10px rgba(255, 68, 68, 0.3)';
+      }
+      
+      // Уведомление VK
+      bridge.send("VKWebAppShowSnackbar", {
+        text: '❌ Пожалуйста, выберите станцию на карте'
+      });
+      
+      return false;
+    }
+    
+    setStationError(false);
+    if (metroMapRef.current) {
+      metroMapRef.current.style.border = '';
+      metroMapRef.current.style.boxShadow = '';
+    }
+    
+    return true;
+  };
+
   // НОВОЕ: Сброс ошибки при изменении никнейма
   const handleNicknameChange = (e) => {
     setNickname(e.target.value);
@@ -524,6 +590,31 @@ export const App = () => {
         nicknameInputRef.current.style.border = '';
         nicknameInputRef.current.style.backgroundColor = '';
         nicknameInputRef.current.style.boxShadow = '';
+      }
+    }
+  };
+
+  // НОВОЕ: Сброс ошибки при изменении цвета одежды
+  const handleClothingColorChange = (e) => {
+    setClothingColor(e.target.value);
+    if (clothingColorError) {
+      setClothingColorError(false);
+      if (clothingColorInputRef.current) {
+        clothingColorInputRef.current.style.border = '';
+        clothingColorInputRef.current.style.backgroundColor = '';
+        clothingColorInputRef.current.style.boxShadow = '';
+      }
+    }
+  };
+
+  // НОВОЕ: Сброс ошибки при выборе станции
+  const handleStationSelect = (stationName) => {
+    setCurrentSelectedStation(stationName);
+    if (stationError) {
+      setStationError(false);
+      if (metroMapRef.current) {
+        metroMapRef.current.style.border = '';
+        metroMapRef.current.style.boxShadow = '';
       }
     }
   };
@@ -617,13 +708,12 @@ export const App = () => {
     }
   };
 
-  // Подтверждение выбора станции
+  // Подтверждение выбора станции с валидацией
   const handleConfirmStation = async () => {
-    // Проверка на заполнение обязательного поля
-    if (!clothingColor || clothingColor.trim() === '') {
-      bridge.send("VKWebAppShowSnackbar", {
-        text: '❌ Пожалуйста, укажите цвет верхней одежды или стиль'
-      });
+    console.log('📍 === НАЧАЛО handleConfirmStation ===');
+    
+    // Проверка цвета одежды
+    if (!validateClothingColor()) {
       return;
     }
     
@@ -636,10 +726,7 @@ export const App = () => {
     }
     
     // Проверка выбора станции
-    if (!currentSelectedStation) {
-      bridge.send("VKWebAppShowSnackbar", {
-        text: '❌ Пожалуйста, выберите станцию на карте'
-      });
+    if (!validateStation()) {
       return;
     }
 
@@ -758,10 +845,6 @@ export const App = () => {
     if (previousMood !== mood) {
       updateUserState();
     }
-  };
-
-  const handleStationSelect = (stationName) => {
-    setCurrentSelectedStation(stationName);
   };
 
   const handleTimerSelect = (minutes) => {
@@ -1193,9 +1276,32 @@ export const App = () => {
                   </div>
                 </div>
                 
-                <div className="metro-map" id="metro-map">
+                <div 
+                  ref={metroMapRef}
+                  className="metro-map" 
+                  id="metro-map"
+                  style={{
+                    border: stationError ? '2px solid #ff4444' : '',
+                    boxShadow: stationError ? '0 0 10px rgba(255, 68, 68, 0.3)' : ''
+                  }}
+                >
                   {renderStationsMap()}
                 </div>
+                
+                {stationError && (
+                  <div style={{
+                    marginTop: '10px',
+                    padding: '8px',
+                    backgroundColor: '#fff5f5',
+                    border: '1px solid #ff4444',
+                    borderRadius: '5px',
+                    color: '#ff4444',
+                    fontSize: '12px',
+                    textAlign: 'center'
+                  }}>
+                    ⚠️ Пожалуйста, выберите станцию на карте выше
+                  </div>
+                )}
               </div>
 
               <div className="user-settings-panel">
@@ -1221,16 +1327,31 @@ export const App = () => {
                 </div>
                 
                 <div className="form-group">
-                  <label htmlFor="color-select">Цвет верхней одежды или стиль *</label>
+                  <label htmlFor="color-select" style={{ color: clothingColorError ? '#ff4444' : '' }}>
+                    Цвет верхней одежды или стиль *
+                    {clothingColorError && (
+                      <span style={{ color: '#ff4444', marginLeft: '5px', fontSize: '12px' }}>
+                        (обязательное поле)
+                      </span>
+                    )}
+                  </label>
                   <input 
+                    ref={clothingColorInputRef}
                     type="text" 
                     id="color-select" 
                     placeholder="Например: черный верх, синий низ, очки, шапка" 
                     value={clothingColor}
-                    onChange={(e) => setClothingColor(e.target.value)}
+                    onChange={handleClothingColorChange}
+                    style={{
+                      border: clothingColorError ? '2px solid #ff4444' : '',
+                      backgroundColor: clothingColorError ? '#fff5f5' : '',
+                      boxShadow: clothingColorError ? '0 0 0 1px #ff4444' : ''
+                    }}
                     required 
                   />
-                  <small className="field-hint">Это поле обязательно для заполнения</small>
+                  <small className="field-hint" style={{ color: clothingColorError ? '#ff4444' : '' }}>
+                    {clothingColorError ? '❌ Это поле обязательно для заполнения' : 'Это поле обязательно для заполнения'}
+                  </small>
                 </div>
                 
                 <TimerComponent 
@@ -1248,11 +1369,37 @@ export const App = () => {
                     }
                   }}
                 />
+                
+                {(clothingColorError || stationError) && (
+                  <div style={{
+                    marginTop: '15px',
+                    padding: '10px',
+                    backgroundColor: '#fff5f5',
+                    border: '1px solid #ff4444',
+                    borderRadius: '5px',
+                    color: '#ff4444',
+                    fontSize: '12px',
+                    textAlign: 'center'
+                  }}>
+                    {clothingColorError && stationError ? (
+                      '⚠️ Пожалуйста, заполните все обязательные поля и выберите станцию'
+                    ) : clothingColorError ? (
+                      '⚠️ Пожалуйста, укажите цвет верхней одежды или стиль'
+                    ) : (
+                      '⚠️ Пожалуйста, выберите станцию на карте'
+                    )}
+                  </div>
+                )}
                            
                 <button 
                   className="btn btn-success" 
                   onClick={handleConfirmStation}
                   disabled={isLoading}
+                  style={{
+                    backgroundColor: clothingColorError || stationError ? '#ff4444' : '',
+                    borderColor: clothingColorError || stationError ? '#ff4444' : '',
+                    marginTop: clothingColorError || stationError ? '15px' : '0'
+                  }}
                 >
                   {isLoading ? 'Присоединение...' : 'Подтвердить параметры и присоединиться'}
                 </button>
@@ -1351,7 +1498,7 @@ export const App = () => {
         </div>
         
         <footer>
-          &copy; 2025 | Гаджи Латипов | Метрос | Санкт-Петербург
+          &copy; 2025 | Гаджи Латипов | Метрос | Санкт  Петербург
         </footer>
       </div>
     </div>
