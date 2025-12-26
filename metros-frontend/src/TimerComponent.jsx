@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { api } from './services/api';
 
 export const TimerComponent = ({ 
   selectedMinutes, 
@@ -8,16 +9,56 @@ export const TimerComponent = ({
 }) => {
   const [timeLeft, setTimeLeft] = useState(selectedMinutes * 60);
   const [isActive, setIsActive] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(false); // Новое состояние для свертывания/раскрытия
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [lastUpdateTime, setLastUpdateTime] = useState(0);
 
+  // Обновление таймера на сервере при изменении
+  const updateTimerOnServer = async (showTimer, seconds, status) => {
+    if (!userId) return;
+    
+    try {
+      await api.updateUser(userId, {
+        show_timer: showTimer,
+        timer_seconds: seconds,
+        status: status,
+        timer_started_at: showTimer ? new Date().toISOString() : null,
+        last_seen: new Date().toISOString()
+      });
+      console.log('✅ Таймер обновлен на сервере:', seconds);
+    } catch (error) {
+      console.error('❌ Ошибка обновления таймера на сервере:', error);
+    }
+  };
+
+  // Периодическое обновление таймера на сервере (каждые 10 секунд)
+  useEffect(() => {
+    if (!isActive || !userId) return;
+    
+    const interval = setInterval(() => {
+      updateTimerOnServer(true, timeLeft, `Таймер: ${formatTime(timeLeft)}`);
+    }, 10000); // Обновляем каждые 10 секунд
+    
+    return () => clearInterval(interval);
+  }, [isActive, timeLeft, userId]);
+
+  // Основной таймер
   useEffect(() => {
     let interval = null;
     
     if (isActive && timeLeft > 0) {
       interval = setInterval(() => {
-        setTimeLeft(timeLeft => timeLeft - 1);
+        setTimeLeft(prevTime => {
+          const newTime = prevTime - 1;
+          
+          // Обновляем на сервере каждую минуту или при важных событиях
+          if (newTime % 60 === 0 || newTime <= 10) {
+            updateTimerOnServer(true, newTime, `Таймер: ${formatTime(newTime)}`);
+          }
+          
+          return newTime;
+        });
       }, 1000);
-    } else if (timeLeft === 0) {
+    } else if (timeLeft === 0 && isActive) {
       setIsActive(false);
       // Оповещаем о завершении таймера
       if (onStatusUpdate) {
@@ -27,28 +68,37 @@ export const TimerComponent = ({
           status: 'Таймер завершен'
         });
       }
+      updateTimerOnServer(false, 0, 'Таймер завершен');
     }
     
     return () => clearInterval(interval);
-  }, [isActive, timeLeft, onStatusUpdate]);
+  }, [isActive, timeLeft, onStatusUpdate, userId]);
 
-  const startTimer = () => {
-    if (selectedMinutes > 0) {
+  const startTimer = async () => {
+    if (selectedMinutes > 0 && userId) {
       setIsActive(true);
-      setTimeLeft(selectedMinutes * 60);
+      const initialTime = selectedMinutes * 60;
+      setTimeLeft(initialTime);
+      
+      // Обновляем на сервере сразу
+      await updateTimerOnServer(true, initialTime, `Таймер установлен: ${selectedMinutes} мин`);
       
       if (onStatusUpdate) {
         onStatusUpdate({
           show_timer: true,
-          timer_seconds: selectedMinutes * 60,
+          timer_seconds: initialTime,
           status: `Таймер установлен: ${selectedMinutes} мин`
         });
       }
     }
   };
 
-  const stopTimer = () => {
+  const stopTimer = async () => {
     setIsActive(false);
+    
+    // Обновляем на сервере
+    await updateTimerOnServer(false, 0, 'Таймер остановлен');
+    
     if (onStatusUpdate) {
       onStatusUpdate({
         show_timer: false,
@@ -99,15 +149,23 @@ export const TimerComponent = ({
                 <button className="btn btn-danger" onClick={stopTimer}>
                   Остановить таймер
                 </button>
+                <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>
+                  ⚡ Другие увидят ваше время
+                </div>
               </>
             ) : (
-              <button 
-                className="btn btn-success" 
-                onClick={startTimer}
-                disabled={selectedMinutes === 0}
-              >
-                Запустить таймер на {selectedMinutes} мин
-              </button>
+              <>
+                <button 
+                  className="btn btn-success" 
+                  onClick={startTimer}
+                  disabled={selectedMinutes === 0}
+                >
+                  Запустить таймер на {selectedMinutes} мин
+                </button>
+                <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>
+                  ⏱️ Другие участники увидят ваш таймер в реальном времени
+                </div>
+              </>
             )}
           </div>
         </div>

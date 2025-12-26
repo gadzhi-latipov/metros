@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import bridge from '@vkontakte/vk-bridge';
 import './App.css';
 import { api, helpers } from './services/api';
-import { TimerComponent } from './TimerComponent';
+// import { TimerComponent } from './TimerComponent';
 
 // Генерация уникального ID устройства
 const generateDeviceId = () => {
@@ -484,6 +484,7 @@ export const App = () => {
       return () => clearTimeout(timeoutId);
     }
   }, [selectedPosition, selectedMood]);
+
 
   // НОВОЕ: Валидация никнейма
   const validateNickname = () => {
@@ -1063,12 +1064,12 @@ export const App = () => {
               )}
             </div>
           </div>
-          {user.show_timer && user.timer_seconds > 0 && (
+          {/* {user.show_timer && user.timer_seconds > 0 && (
             <div className="user-timer-display">
               <div className="timer-label">⏰ Осталось:</div>
               <div className="timer-value">{helpers.formatTime(user.timer_seconds)}</div>
             </div>
-          )}
+          )} */}
         </div>
       );
     });
@@ -1354,7 +1355,7 @@ export const App = () => {
                   </small>
                 </div>
                 
-                <TimerComponent 
+                 {/* <TimerComponent 
                   selectedMinutes={selectedMinutes}
                   onTimerSelect={handleTimerSelect}
                   userId={userIdRef.current}
@@ -1368,7 +1369,7 @@ export const App = () => {
                       });
                     }
                   }}
-                />
+                />  */}
                 
                 {(clothingColorError || stationError) && (
                   <div style={{
