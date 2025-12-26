@@ -39,6 +39,7 @@ export const App = () => {
   const [isOnline, setIsOnline] = useState(true);
   const [deviceId, setDeviceId] = useState('');
   const [isSessionRestoring, setIsSessionRestoring] = useState(false);
+  const [nicknameError, setNicknameError] = useState(false); // НОВОЕ: состояние ошибки никнейма
   
   const CACHE_DURATION = 10000;
   const PING_INTERVAL = 15000;
@@ -47,6 +48,7 @@ export const App = () => {
   const globalRefreshIntervalRef = useRef(null);
   const sessionIdRef = useRef('');
   const vkUserIdRef = useRef(null);
+  const nicknameInputRef = useRef(null); // НОВОЕ: ссылка на поле ввода
 
   // Генерация уникального ID сессии
   const generateSessionId = () => {
@@ -479,15 +481,59 @@ export const App = () => {
     }
   }, [selectedPosition, selectedMood]);
 
-  // Вход в комнату ожидания
-  const handleEnterWaitingRoom = async () => {
-    console.log('🚪 === НАЧАЛО handleEnterWaitingRoom ===');
-    
-    // Проверка обязательных полей
-    if (!nickname || nickname.trim() === '') {
+  // НОВОЕ: Валидация никнейма
+  const validateNickname = () => {
+    const trimmedNickname = nickname.trim();
+    if (!trimmedNickname) {
+      setNicknameError(true);
+      
+      // Визуальное выделение поля
+      if (nicknameInputRef.current) {
+        nicknameInputRef.current.style.border = '2px solid #ff4444';
+        nicknameInputRef.current.style.backgroundColor = '#fff5f5';
+        nicknameInputRef.current.style.boxShadow = '0 0 0 1px #ff4444';
+        
+        // Фокусировка на поле
+        nicknameInputRef.current.focus();
+      }
+      
+      // Уведомление VK
       bridge.send("VKWebAppShowSnackbar", {
         text: '❌ Пожалуйста, введите ваш никнейм'
       });
+      
+      return false;
+    }
+    
+    setNicknameError(false);
+    if (nicknameInputRef.current) {
+      nicknameInputRef.current.style.border = '';
+      nicknameInputRef.current.style.backgroundColor = '';
+      nicknameInputRef.current.style.boxShadow = '';
+    }
+    
+    return true;
+  };
+
+  // НОВОЕ: Сброс ошибки при изменении никнейма
+  const handleNicknameChange = (e) => {
+    setNickname(e.target.value);
+    if (nicknameError) {
+      setNicknameError(false);
+      if (nicknameInputRef.current) {
+        nicknameInputRef.current.style.border = '';
+        nicknameInputRef.current.style.backgroundColor = '';
+        nicknameInputRef.current.style.boxShadow = '';
+      }
+    }
+  };
+
+  // Вход в комнату ожидания с валидацией
+  const handleEnterWaitingRoom = async () => {
+    console.log('🚪 === НАЧАЛО handleEnterWaitingRoom ===');
+    
+    // Валидация никнейма
+    if (!validateNickname()) {
       return;
     }
     
@@ -818,10 +864,15 @@ export const App = () => {
   const showSetup = () => setCurrentScreen('setup');
   const showWaitingRoom = () => {
     if (!userIdRef.current) {
+      // Проверяем никнейм перед переходом
+      if (!validateNickname()) {
+        return;
+      }
+      // Если никнейм валиден, но userId еще нет, показываем сообщение
       bridge.send("VKWebAppShowSnackbar", {
         text: 'Сначала создайте профиль'
       });
-      return showSetup();
+      return;
     }
     setCurrentScreen('waiting');
   };
@@ -1015,17 +1066,31 @@ export const App = () => {
               <p>Укажите ваш город и пол</p>
               
               <div className="form-group">
-                <label htmlFor="nickname-input">Укажите Ваш никнейм *</label>
+                <label htmlFor="nickname-input" style={{ color: nicknameError ? '#ff4444' : '' }}>
+                  Укажите Ваш никнейм *
+                  {nicknameError && (
+                    <span style={{ color: '#ff4444', marginLeft: '5px', fontSize: '12px' }}>
+                      (обязательное поле)
+                    </span>
+                  )}
+                </label>
                 <input 
+                  ref={nicknameInputRef}
                   type="text" 
                   id="nickname-input" 
                   placeholder="Придумайте уникальное имя" 
                   value={nickname}
-                  onChange={(e) => setNickname(e.target.value)}
+                  onChange={handleNicknameChange}
+                  className={nicknameError ? 'error-input' : ''}
+                  style={{
+                    border: nicknameError ? '2px solid #ff4444' : '',
+                    backgroundColor: nicknameError ? '#fff5f5' : '',
+                    boxShadow: nicknameError ? '0 0 0 1px #ff4444' : ''
+                  }}
                   required 
                 />
-                <small className="field-hint">
-                  Это имя будет видно другим участникам
+                <small className="field-hint" style={{ color: nicknameError ? '#ff4444' : '' }}>
+                  {nicknameError ? '❌ Это поле обязательно для заполнения' : 'Это имя будет видно другим участникам'}
                 </small>
               </div>
               
@@ -1072,9 +1137,28 @@ export const App = () => {
                 className="btn" 
                 onClick={handleEnterWaitingRoom}
                 disabled={isLoading || isSessionRestoring}
+                style={{
+                  backgroundColor: nicknameError ? '#ff4444' : '',
+                  borderColor: nicknameError ? '#ff4444' : ''
+                }}
               >
                 {isLoading ? 'Создание профиля...' : 'Войти в комнату ожидания'}
               </button>
+              
+              {nicknameError && (
+                <div style={{
+                  marginTop: '10px',
+                  padding: '10px',
+                  backgroundColor: '#fff5f5',
+                  border: '1px solid #ff4444',
+                  borderRadius: '5px',
+                  color: '#ff4444',
+                  fontSize: '12px',
+                  textAlign: 'center'
+                }}>
+                  ⚠️ Пожалуйста, укажите ваш никнейм для продолжения
+                </div>
+              )}
             </div>
           )}
 
