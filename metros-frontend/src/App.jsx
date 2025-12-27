@@ -82,6 +82,24 @@ const clearSessionState = () => {
   console.log('🧹 Очищено состояние сессии');
 };
 
+// Функция для установки пользователя в оффлайн при скрытии/закрытии
+const setUserOffline = async (userId, sessionId, deviceId) => {
+  if (!userId) return;
+  
+  try {
+    console.log('👋 Устанавливаем пользователя в оффлайн:', userId);
+    await api.updateUser(userId, { 
+      online: false,
+      last_seen: new Date().toISOString(),
+      session_id: sessionId,
+      device_id: deviceId
+    });
+    console.log('✅ Пользователь успешно установлен в оффлайн');
+  } catch (error) {
+    console.error('❌ Ошибка установки пользователя в оффлайн:', error);
+  }
+};
+
 export const App = () => {
   const [fetchedUser, setUser] = useState();
   const [appState, setAppState] = useState('active');
@@ -97,7 +115,7 @@ export const App = () => {
   const [selectedMinutes, setSelectedMinutes] = useState(5);
   const [currentSelectedStation, setCurrentSelectedStation] = useState(null);
   const [currentGroup, setCurrentGroup] = useState(null);
-  const [stationsData, setStationsData] = useState([]);
+  const [stationsData, setStationsData] = useState({ stationStats: [], totalStats: { total_connected: 0, total_waiting: 0 } });
   const [groupMembers, setGroupMembers] = useState([]);
   const [allUsers, setAllUsers] = useState([]);
   const [usersCache, setUsersCache] = useState(null);
@@ -125,6 +143,7 @@ export const App = () => {
   const metroMapRef = useRef(null);
   const isInitialMountRef = useRef(true);
   const sessionRestoreInProgressRef = useRef(false);
+  const appVisibilityHandlerRef = useRef(null);
 
   // Основная инициализация приложения
   useEffect(() => {
@@ -149,6 +168,36 @@ export const App = () => {
         console.error('❌ Ошибка инициализации VK Bridge:', error);
       });
 
+    // Обработчик видимости страницы
+    appVisibilityHandlerRef.current = (event) => {
+      console.log('👀 Событие видимости страницы:', event.type);
+      
+      if (document.hidden || event.type === 'blur' || event.type === 'visibilitychange') {
+        // Приложение скрыто или свернуто
+        console.log('📱 Приложение скрыто/свернуто');
+        setAppState('background');
+        
+        // Устанавливаем пользователя в оффлайн
+        if (userIdRef.current) {
+          setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
+        }
+      } else {
+        // Приложение активно
+        console.log('📱 Приложение активно');
+        setAppState('active');
+        
+        // Восстанавливаем сессию если нужно
+        if (userIdRef.current) {
+          improvedPingActivity();
+        }
+      }
+    };
+
+    // Подписка на события видимости страницы
+    document.addEventListener('visibilitychange', appVisibilityHandlerRef.current);
+    window.addEventListener('blur', appVisibilityHandlerRef.current);
+    window.addEventListener('focus', appVisibilityHandlerRef.current);
+
     // Подписка на события VK Bridge
     bridge.subscribe((event) => {
       if (!event.detail) return;
@@ -163,11 +212,17 @@ export const App = () => {
           document.body.attributes.setNamedItem(schemeAttribute);
           break;
         case 'VKWebAppViewHide':
+          console.log('📱 VKWebAppViewHide - приложение скрыто');
           setAppState('background');
+          // Устанавливаем пользователя в оффлайн
+          if (userIdRef.current) {
+            setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
+          }
           break;
         case 'VKWebAppViewRestore':
+          console.log('📱 VKWebAppViewRestore - приложение восстановлено');
           setAppState('active');
-          // При восстановлении вида VK попробуем восстановить сессию
+          // При восстановлении вида VK восстанавливаем сессию
           if (userIdRef.current) {
             improvedPingActivity();
           }
@@ -235,11 +290,24 @@ export const App = () => {
     // Запуск глобального обновления
     const cleanupGlobalRefresh = startGlobalRefresh();
 
+    // Очистка при размонтировании
     return () => {
       cleanupGlobalRefresh();
       
       if (globalRefreshIntervalRef.current) {
         clearInterval(globalRefreshIntervalRef.current);
+      }
+      
+      // Удаляем обработчики событий видимости
+      if (appVisibilityHandlerRef.current) {
+        document.removeEventListener('visibilitychange', appVisibilityHandlerRef.current);
+        window.removeEventListener('blur', appVisibilityHandlerRef.current);
+        window.removeEventListener('focus', appVisibilityHandlerRef.current);
+      }
+      
+      // Устанавливаем пользователя в оффлайн при размонтировании
+      if (userIdRef.current) {
+        setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
       }
     };
   }, []);
@@ -562,13 +630,47 @@ export const App = () => {
     return () => clearInterval(interval);
   };
 
-  // Загрузка статистики станций
+  // Загрузка статистики станций - ИСПРАВЛЕННАЯ ФУНКЦИЯ
   const loadStationsMap = async () => {
     try {
+      console.log('🗺️ Загрузка статистики станций для города:', selectedCity);
       const data = await api.getStationsStats(selectedCity);
+      console.log('📊 Получены данные станций:', data);
+      
+      // Убедимся, что данные имеют правильную структуру
+      if (!data.stationStats) {
+        console.warn('⚠️ Данные stationStats отсутствуют, используем пустой массив');
+        data.stationStats = [];
+      }
+      
+      if (!data.totalStats) {
+        console.warn('⚠️ Данные totalStats отсутствуют, создаем по умолчанию');
+        data.totalStats = {
+          total_connected: 0,
+          total_waiting: 0
+        };
+      }
+      
       setStationsData(data);
+      
+      // Проверим отладку
+      if (data.stationStats.length > 0) {
+        console.log('✅ Статистика загружена успешно:', {
+          totalStations: data.stationStats.length,
+          totalConnected: data.totalStats.total_connected,
+          totalWaiting: data.totalStats.total_waiting,
+          sampleStation: data.stationStats[0]
+        });
+      } else {
+        console.log('ℹ️ Нет данных о станциях');
+      }
     } catch (error) {
-      console.error('Ошибка загрузки карты станций:', error);
+      console.error('❌ Ошибка загрузки карты станций:', error);
+      // Устанавливаем пустые данные при ошибке
+      setStationsData({
+        stationStats: [],
+        totalStats: { total_connected: 0, total_waiting: 0 }
+      });
     }
   };
 
@@ -714,6 +816,11 @@ export const App = () => {
     const handleOffline = () => {
       console.log('🌐 Потеряно интернет-соединение');
       setIsOnline(false);
+      
+      // При потере соединения помечаем пользователя как оффлайн
+      if (userIdRef.current) {
+        setUserOffline(userIdRef.current, sessionIdRef.current, deviceId);
+      }
     };
     
     window.addEventListener('online', handleOnline);
@@ -1307,12 +1414,14 @@ export const App = () => {
     }
   };
 
-  // Обработчик закрытия страницы
+  // Обработчик закрытия страницы - УЛУЧШЕННАЯ ВЕРСИЯ
   useEffect(() => {
-    const handleBeforeUnload = async () => {
+    const handleBeforeUnload = async (event) => {
+      console.log('⚠️ Страница закрывается или перезагружается');
+      
+      // Сохраняем текущее состояние
       if (userIdRef.current) {
-        // Сохраняем текущее состояние перед закрытием
-        saveSessionState({
+        const sessionState = {
           userId: userIdRef.current,
           nickname,
           selectedCity,
@@ -1322,26 +1431,35 @@ export const App = () => {
           currentSelectedStation,
           currentScreen,
           timestamp: Date.now()
-        });
+        };
         
-        // Отмечаем пользователя как оффлайн
+        saveSessionState(sessionState);
+        
+        // Устанавливаем пользователя в оффлайн
         try {
-          await api.updateUser(userIdRef.current, { 
-            online: false,
-            last_seen: new Date().toISOString(),
-            session_id: sessionIdRef.current,
-            device_id: deviceId
-          });
+          await setUserOffline(userIdRef.current, sessionIdRef.current, deviceId);
         } catch (error) {
-          // Игнорируем ошибки при закрытии страницы
+          console.error('❌ Ошибка при установке оффлайн статуса:', error);
         }
       }
     };
 
+    // Для современных браузеров
     window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    // Для мобильных устройств и VK мини-приложений
+    window.addEventListener('pagehide', handleBeforeUnload);
+    
+    // Для iOS Safari
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && userIdRef.current) {
+        setUserOffline(userIdRef.current, sessionIdRef.current, deviceId);
+      }
+    });
     
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
     };
   }, [currentScreen, currentGroup, deviceId, nickname, selectedCity, selectedGender, clothingColor, wagonNumber, currentSelectedStation]);
 
@@ -1370,15 +1488,29 @@ export const App = () => {
     setCurrentScreen('joined');
   };
 
-  // Рендер карты станций
+  // Рендер карты станций - ИСПРАВЛЕННЫЙ РЕНДЕР
   const renderStationsMap = () => {
-    if (!stationsData.stationStats) return <div className="loading">Загрузка карты станций...</div>;
+    if (!stationsData.stationStats || stationsData.stationStats.length === 0) {
+      return (
+        <div className="loading" style={{ textAlign: 'center', padding: '20px' }}>
+          <div>Загрузка карты станций...</div>
+          <small style={{ color: '#666' }}>Пока нет данных о станциях</small>
+        </div>
+      );
+    }
     
-    const allStations = helpers.stations[selectedCity];
+    const allStations = helpers.stations[selectedCity] || [];
     const stationsMap = {};
     
+    // Создаем карту станций из полученных данных
     stationsData.stationStats.forEach(station => {
       stationsMap[station.station] = station;
+    });
+    
+    console.log('🗺️ Рендерим станции:', {
+      totalStations: allStations.length,
+      stationsWithData: Object.keys(stationsMap).length,
+      sampleData: stationsData.stationStats[0]
     });
     
     return allStations.map(stationName => {
@@ -1484,7 +1616,8 @@ export const App = () => {
           📱 Device: {deviceId?.substring(0, 10)}... | 
           👤 User ID: {userIdRef.current?.substring(0, 10)}... | 
           🖥️ Screen: {currentScreen} |
-          🕒 Cold Start: {isColdStart ? 'Да' : 'Нет'}
+          🕒 Cold Start: {isColdStart ? 'Да' : 'Нет'} |
+          📊 Stations: {stationsData.stationStats?.length || 0}
         </div>
       );
     }
@@ -1881,3 +2014,4 @@ export const App = () => {
     </div>
   );
 };
+
