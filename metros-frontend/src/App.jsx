@@ -5,15 +5,12 @@ import { api, helpers } from './services/api';
 
 // Генерация уникального ID устройства с улучшенным хранением
 const generateDeviceId = () => {
-  // Пытаемся получить deviceId из localStorage
   let deviceId = localStorage.getItem('deviceId');
   
-  // Если нет в localStorage, проверяем sessionStorage
   if (!deviceId) {
     deviceId = sessionStorage.getItem('deviceId');
   }
   
-  // Если все еще нет, создаем новый
   if (!deviceId) {
     deviceId = 'device_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
     localStorage.setItem('deviceId', deviceId);
@@ -47,11 +44,9 @@ const saveSessionState = (state) => {
 // Загрузка состояния сессии
 const loadSessionState = () => {
   try {
-    // Сначала пробуем localStorage
     let sessionData = localStorage.getItem('metro_session_state');
     
     if (!sessionData) {
-      // Пробуем sessionStorage
       sessionData = sessionStorage.getItem('metro_session_state');
     }
     
@@ -59,7 +54,6 @@ const loadSessionState = () => {
       const parsed = JSON.parse(sessionData);
       const now = Date.now();
       
-      // Проверяем актуальность (сессия действительна 30 минут)
       if (now - parsed.timestamp < 30 * 60 * 1000) {
         console.log('📂 Загружено сохраненное состояние сессии');
         return parsed;
@@ -82,7 +76,7 @@ const clearSessionState = () => {
   console.log('🧹 Очищено состояние сессии');
 };
 
-// Функция для установки пользователя в оффлайн при скрытии/закрытии
+// Функция для установки пользователя в оффлайн
 const setUserOffline = async (userId, sessionId, deviceId) => {
   if (!userId) return;
   
@@ -97,6 +91,79 @@ const setUserOffline = async (userId, sessionId, deviceId) => {
     console.log('✅ Пользователь успешно установлен в оффлайн');
   } catch (error) {
     console.error('❌ Ошибка установки пользователя в оффлайн:', error);
+  }
+};
+
+// Функция для вычисления статистики станций
+const calculateStationsStats = (users, city) => {
+  try {
+    console.log('📊 Вычисляем статистику станций для города:', city);
+    console.log('👥 Всего пользователей:', users.length);
+    
+    const stationStats = {};
+    let total_connected = 0;
+    let total_waiting = 0;
+    
+    // Получаем список станций для выбранного города
+    const cityStations = helpers.stations[city] || [];
+    
+    // Инициализируем все станции города
+    cityStations.forEach(station => {
+      stationStats[station] = {
+        station: station,
+        waiting: 0,
+        connected: 0,
+        totalUsers: 0
+      };
+    });
+    
+    // Подсчитываем пользователей по станциям
+    users.forEach(user => {
+      // Проверяем, что пользователь онлайн
+      if (user.online !== true) return;
+      
+      if (user.is_waiting && !user.is_connected) {
+        // Пользователь в режиме ожидания
+        total_waiting++;
+      } else if (user.is_connected && user.station) {
+        // Пользователь на станции
+        total_connected++;
+        
+        // Если станция есть в списке станций города
+        if (stationStats[user.station]) {
+          stationStats[user.station].connected++;
+          stationStats[user.station].totalUsers++;
+        } else {
+          // Если станции нет в списке, но пользователь на ней
+          console.log('⚠️ Станция не найдена в списке города:', user.station);
+        }
+      }
+    });
+    
+    // Преобразуем объект в массив
+    const stationStatsArray = Object.values(stationStats);
+    
+    console.log('📈 Статистика рассчитана:', {
+      totalStations: stationStatsArray.length,
+      totalConnected: total_connected,
+      totalWaiting: total_waiting,
+      stationsWithUsers: stationStatsArray.filter(s => s.totalUsers > 0).length
+    });
+    
+    return {
+      stationStats: stationStatsArray,
+      totalStats: {
+        total_connected,
+        total_waiting,
+        total_users: total_connected + total_waiting
+      }
+    };
+  } catch (error) {
+    console.error('❌ Ошибка расчета статистики станций:', error);
+    return {
+      stationStats: [],
+      totalStats: { total_connected: 0, total_waiting: 0, total_users: 0 }
+    };
   }
 };
 
@@ -115,7 +182,10 @@ export const App = () => {
   const [selectedMinutes, setSelectedMinutes] = useState(5);
   const [currentSelectedStation, setCurrentSelectedStation] = useState(null);
   const [currentGroup, setCurrentGroup] = useState(null);
-  const [stationsData, setStationsData] = useState({ stationStats: [], totalStats: { total_connected: 0, total_waiting: 0 } });
+  const [stationsData, setStationsData] = useState({ 
+    stationStats: [], 
+    totalStats: { total_connected: 0, total_waiting: 0, total_users: 0 } 
+  });
   const [groupMembers, setGroupMembers] = useState([]);
   const [allUsers, setAllUsers] = useState([]);
   const [usersCache, setUsersCache] = useState(null);
@@ -173,7 +243,6 @@ export const App = () => {
       console.log('👀 Событие видимости страницы:', event.type);
       
       if (document.hidden || event.type === 'blur' || event.type === 'visibilitychange') {
-        // Приложение скрыто или свернуто
         console.log('📱 Приложение скрыто/свернуто');
         setAppState('background');
         
@@ -182,7 +251,6 @@ export const App = () => {
           setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
         }
       } else {
-        // Приложение активно
         console.log('📱 Приложение активно');
         setAppState('active');
         
@@ -353,6 +421,9 @@ export const App = () => {
           device_id: deviceId
         });
         
+        // Загружаем данные станций
+        await loadStationsMap();
+        
         // Восстанавливаем экран
         if (serverSession.is_connected && serverSession.station) {
           // Восстанавливаем комнату станции
@@ -365,9 +436,6 @@ export const App = () => {
           
           setCurrentGroup(groupData);
           
-          // Загружаем данные станции
-          await loadStationsMap();
-          
           // Загружаем участников
           setTimeout(async () => {
             await loadGroupMembers(serverSession.station);
@@ -379,7 +447,6 @@ export const App = () => {
           setCurrentScreen('waiting');
           
           // Загружаем данные
-          await loadStationsMap();
           await loadRequests();
         } else {
           // Непонятное состояние - показываем настройки
@@ -630,47 +697,43 @@ export const App = () => {
     return () => clearInterval(interval);
   };
 
-  // Загрузка статистики станций - ИСПРАВЛЕННАЯ ФУНКЦИЯ
+  // Загрузка статистики станций - ИСПРАВЛЕННАЯ ВЕРСИЯ
   const loadStationsMap = async () => {
     try {
       console.log('🗺️ Загрузка статистики станций для города:', selectedCity);
-      const data = await api.getStationsStats(selectedCity);
-      console.log('📊 Получены данные станций:', data);
       
-      // Убедимся, что данные имеют правильную структуру
-      if (!data.stationStats) {
-        console.warn('⚠️ Данные stationStats отсутствуют, используем пустой массив');
-        data.stationStats = [];
-      }
+      // Получаем всех пользователей
+      const users = await api.getUsers();
       
-      if (!data.totalStats) {
-        console.warn('⚠️ Данные totalStats отсутствуют, создаем по умолчанию');
-        data.totalStats = {
-          total_connected: 0,
-          total_waiting: 0
-        };
-      }
+      // Рассчитываем статистику локально
+      const stats = calculateStationsStats(users, selectedCity);
       
-      setStationsData(data);
+      // Обновляем состояние
+      setStationsData(stats);
       
-      // Проверим отладку
-      if (data.stationStats.length > 0) {
-        console.log('✅ Статистика загружена успешно:', {
-          totalStations: data.stationStats.length,
-          totalConnected: data.totalStats.total_connected,
-          totalWaiting: data.totalStats.total_waiting,
-          sampleStation: data.stationStats[0]
-        });
-      } else {
-        console.log('ℹ️ Нет данных о станциях');
-      }
+      // Также обновляем allUsers
+      const activeUsers = users.filter(user => user.online === true);
+      setAllUsers(activeUsers);
+      setUsersCache(activeUsers);
+      setCacheTimestamp(Date.now());
+      
+      console.log('✅ Статистика загружена:', {
+        stations: stats.stationStats.length,
+        connected: stats.totalStats.total_connected,
+        waiting: stats.totalStats.total_waiting,
+        total: stats.totalStats.total_users
+      });
+      
+      return stats;
     } catch (error) {
       console.error('❌ Ошибка загрузки карты станций:', error);
       // Устанавливаем пустые данные при ошибке
-      setStationsData({
+      const emptyStats = {
         stationStats: [],
-        totalStats: { total_connected: 0, total_waiting: 0 }
-      });
+        totalStats: { total_connected: 0, total_waiting: 0, total_users: 0 }
+      };
+      setStationsData(emptyStats);
+      return emptyStats;
     }
   };
 
@@ -1414,7 +1477,7 @@ export const App = () => {
     }
   };
 
-  // Обработчик закрытия страницы - УЛУЧШЕННАЯ ВЕРСИЯ
+  // Обработчик закрытия страницы
   useEffect(() => {
     const handleBeforeUnload = async (event) => {
       console.log('⚠️ Страница закрывается или перезагружается');
@@ -1490,7 +1553,9 @@ export const App = () => {
 
   // Рендер карты станций - ИСПРАВЛЕННЫЙ РЕНДЕР
   const renderStationsMap = () => {
-    if (!stationsData.stationStats || stationsData.stationStats.length === 0) {
+    const { stationStats } = stationsData;
+    
+    if (!stationStats || stationStats.length === 0) {
       return (
         <div className="loading" style={{ textAlign: 'center', padding: '20px' }}>
           <div>Загрузка карты станций...</div>
@@ -1499,29 +1564,29 @@ export const App = () => {
       );
     }
     
-    const allStations = helpers.stations[selectedCity] || [];
-    const stationsMap = {};
+    // Получаем список станций для выбранного города
+    const cityStations = helpers.stations[selectedCity] || [];
     
-    // Создаем карту станций из полученных данных
-    stationsData.stationStats.forEach(station => {
+    // Создаем карту для быстрого поиска
+    const stationsMap = {};
+    stationStats.forEach(station => {
       stationsMap[station.station] = station;
     });
     
     console.log('🗺️ Рендерим станции:', {
-      totalStations: allStations.length,
-      stationsWithData: Object.keys(stationsMap).length,
-      sampleData: stationsData.stationStats[0]
+      totalStations: cityStations.length,
+      stationsWithData: Object.keys(stationsMap).length
     });
     
-    return allStations.map(stationName => {
+    return cityStations.map(stationName => {
       const stationData = stationsMap[stationName];
-      let userCount = 0;
+      
+      // Получаем данные для станции
       let waitingCount = 0;
       let connectedCount = 0;
       let stationClass = 'empty';
       
       if (stationData) {
-        userCount = stationData.totalUsers || 0;
         waitingCount = stationData.waiting || 0;
         connectedCount = stationData.connected || 0;
         
@@ -1532,6 +1597,7 @@ export const App = () => {
         }
       }
       
+      const totalCount = waitingCount + connectedCount;
       const isSelected = currentSelectedStation === stationName;
       
       return (
@@ -1541,7 +1607,7 @@ export const App = () => {
           onClick={() => handleStationSelect(stationName)}
         >
           <div className="station-name">{stationName}</div>
-          {userCount > 0 ? (
+          {totalCount > 0 ? (
             <div className="station-counts">
               {waitingCount > 0 && <span className="station-count count-waiting">{waitingCount}⏳</span>}
               {connectedCount > 0 && <span className="station-count count-connected">{connectedCount}✅</span>}
@@ -1617,7 +1683,7 @@ export const App = () => {
           👤 User ID: {userIdRef.current?.substring(0, 10)}... | 
           🖥️ Screen: {currentScreen} |
           🕒 Cold Start: {isColdStart ? 'Да' : 'Нет'} |
-          📊 Stations: {stationsData.stationStats?.length || 0}
+          📊 Stats: {stationsData.totalStats?.total_connected || 0}✅ {stationsData.totalStats?.total_waiting || 0}⏳
         </div>
       );
     }
@@ -2014,4 +2080,3 @@ export const App = () => {
     </div>
   );
 };
-

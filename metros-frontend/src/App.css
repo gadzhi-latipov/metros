@@ -1,8 +1,5 @@
-
- /* СБРОС И БАЗОВЫЕ СТИЛИ */
- 
-
- body {
+/* App.css */
+body {
     background: linear-gradient(135deg, #0057b8 0%, #ffd700 100%);
     color: #333;
     min-height: 100vh;
@@ -13,7 +10,6 @@
 }
 
 /* ===== ОСНОВНАЯ СТРУКТУРА ===== */
-
 .container { 
     width: 100%;
     max-width: 900px;
@@ -24,13 +20,9 @@
     margin-top: 20px;
 }
 
-
-
 .content {
     padding: 25px;
 }
-
-
 
 /* ===== ШАПКА ===== */
 header {
@@ -94,7 +86,6 @@ label {
     margin-bottom: 8px;
     font-weight: 600;
     color: #0057b8;
-    
 }
 
 select, input {
@@ -104,7 +95,6 @@ select, input {
     border-radius: 8px;
     font-size: 16px;
     transition: all 0.3s;
-    
 }
 
 #color-select::placeholder {
@@ -115,7 +105,6 @@ select:focus, input:focus {
     border-color: #0057b8;
     outline: none;
     box-shadow: 0 0 0 3px rgba(0, 87, 184, 0.2);
-    
 }
 
 .btn {
@@ -235,9 +224,10 @@ select:focus, input:focus {
     text-align: center;
     cursor: pointer;
     transition: all 0.2s ease;
-  position: relative;
+    position: relative;
     background: white;
 }
+
 .state-card.updating {
   opacity: 0.7;
   pointer-events: none;
@@ -261,6 +251,7 @@ select:focus, input:focus {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
 }
+
 .state-card:hover {
     border-color: #007bff;
     transform: translateY(-2px);
@@ -330,6 +321,7 @@ select:focus, input:focus {
   50% { transform: scale(1.05); }
   100% { transform: scale(1); }
 }
+
 .stations-map-container {
     margin: 20px 0;
     padding: 20px;
@@ -555,23 +547,6 @@ select:focus, input:focus {
     .legend-item {
         font-size: 10px;
     }
-    
-    /* Улучшение для очень маленьких экранов */
-    @media (max-width: 360px) {
-        .metro-map {
-            grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-            gap: 4px;
-        }
-        
-        .station-map-item {
-            padding: 6px 4px;
-            min-height: 60px;
-        }
-        
-        .station-name {
-            font-size: 10px;
-        }
-    }
 }
 
 /* Улучшение скролла на мобильных */
@@ -601,40 +576,41 @@ select:focus, input:focus {
     justify-content: center;
     min-height: 200px;
 }
+
 /* Нейроморфный лоадер */
-            .neuromorphic-circle {
-                width: 80px;
-                height: 80px;
-                border-radius: 50%;
-                background: #0a0a0a;
-                position: relative;
-                box-shadow: 
-                    -8px -8px 16px rgba(255, 255, 255, 0.05),
-                    8px 8px 16px rgba(0, 0, 0, 0.5);
-            }
-            
-            .neuromorphic-circle::before {
-                content: '';
-                position: absolute;
-                top: 5px;
-                left: 5px;
-                right: 5px;
-                bottom: 5px;
-                border-radius: 50%;
-                box-shadow: 
-                    inset -4px -4px 8px rgba(255, 255, 255, 0.05),
-                    inset 4px 4px 8px rgba(0, 0, 0, 0.5);
-                border: 2px solid transparent;
-                background: 
-                    linear-gradient(#0a0a0a, #0a0a0a) padding-box,
-                    conic-gradient(from 0deg, #00ffff, #ff00ff, #ffff00, #00ffff) border-box;
-                animation: neuromorphic-rotate 2s linear infinite;
-            }
-            
-            @keyframes neuromorphic-rotate {
-                0% { transform: rotate(0deg); }
-                100% { transform: rotate(360deg); }
-            }
+.neuromorphic-circle {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    background: #0a0a0a;
+    position: relative;
+    box-shadow: 
+        -8px -8px 16px rgba(255, 255, 255, 0.05),
+        8px 8px 16px rgba(0, 0, 0, 0.5);
+}
+
+.neuromorphic-circle::before {
+    content: '';
+    position: absolute;
+    top: 5px;
+    left: 5px;
+    right: 5px;
+    bottom: 5px;
+    border-radius: 50%;
+    box-shadow: 
+        inset -4px -4px 8px rgba(255, 255, 255, 0.05),
+        inset 4px 4px 8px rgba(0, 0, 0, 0.5);
+    border: 2px solid transparent;
+    background: 
+        linear-gradient(#0a0a0a, #0a0a0a) padding-box,
+        conic-gradient(from 0deg, #00ffff, #ff00ff, #ffff00, #00ffff) border-box;
+    animation: neuromorphic-rotate 2s linear infinite;
+}
+
+@keyframes neuromorphic-rotate {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
 
 /* ===== СПИСКИ ПОЛЬЗОВАТЕЛЕЙ ===== */
 .users-list-section {
@@ -783,6 +759,7 @@ select:focus, input:focus {
   margin: 10px 0;
   color: #333;
 }
+
 .compact-timer {
     background: #f8f9fa;
     border: 2px solid #0057b8;
@@ -1181,6 +1158,7 @@ footer {
     font-size: 14px;
     opacity: 0.8;
 }
+
 /* Стили для полей с ошибками */
 .input-error {
   border: 2px solid #ff4444 !important;
@@ -1197,12 +1175,14 @@ footer {
   margin-top: 5px;
   display: block;
 }
+
 .field-hint {
   color: #666;
   font-size: 11px;
   margin-top: 4px;
   display: block;
 }
+
 /* Стили для поля никнейма */
 #nickname-input {
   width: 100%;
@@ -1234,6 +1214,7 @@ footer {
   font-weight: 500;
   color: #333;
 }
+
 .restoring-session {
   position: fixed;
   top: 0;
@@ -1272,4 +1253,34 @@ footer {
   font-size: 14px;
   box-shadow: 0 2px 10px rgba(255, 68, 68, 0.3);
   animation: pulse 2s infinite;
+}
+
+/* Индикатор загрузки */
+.loader-card {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: white;
+  padding: 30px;
+  border-radius: 15px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  z-index: 1000;
+  text-align: center;
+}
+
+.loader-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.loader-title {
+  margin-bottom: 20px;
+  color: #0057b8;
+}
+
+.session-info {
+  font-family: monospace;
 }
