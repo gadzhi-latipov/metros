@@ -1123,7 +1123,7 @@ export const App = () => {
         </div>
       )}
       
-      <p className="disclaimer">Сайт использует вымышленные имена пользователей</p>
+      
       
       <div className="container">
         <header>
