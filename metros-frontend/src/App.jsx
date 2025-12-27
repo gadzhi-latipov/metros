@@ -97,7 +97,10 @@ export const App = () => {
   const [selectedMinutes, setSelectedMinutes] = useState(5);
   const [currentSelectedStation, setCurrentSelectedStation] = useState(null);
   const [currentGroup, setCurrentGroup] = useState(null);
-  const [stationsData, setStationsData] = useState([]);
+  const [stationsData, setStationsData] = useState({
+    stationStats: [],
+    totalStats: { total_connected: 0, total_waiting: 0 }
+  });
   const [groupMembers, setGroupMembers] = useState([]);
   const [allUsers, setAllUsers] = useState([]);
   const [usersCache, setUsersCache] = useState(null);
@@ -112,11 +115,6 @@ export const App = () => {
   const [stationError, setStationError] = useState(false);
   const [restoreAttempted, setRestoreAttempted] = useState(false);
   const [isColdStart, setIsColdStart] = useState(true);
-  const [stationsMapData, setStationsMapData] = useState({});
-  const [totalStats, setTotalStats] = useState({
-    total_connected: 0,
-    total_waiting: 0
-  });
   
   const CACHE_DURATION = 10000;
   const PING_INTERVAL = 15000;
@@ -267,7 +265,7 @@ export const App = () => {
         userIdRef.current = savedState.userId;
       }
       
-      // Сначала загружаем карту станций
+      // Загружаем карту станций
       await loadStationsMap();
       
       // Проверяем сессию на сервере
@@ -563,42 +561,52 @@ export const App = () => {
     return () => clearInterval(interval);
   };
 
-  // Загрузка статистики станций с улучшенной обработкой
+  // Загрузка статистики станций с исправлениями
   const loadStationsMap = async () => {
     try {
       console.log('🗺️ Загружаем статистику станций для города:', selectedCity);
       const data = await api.getStationsStats(selectedCity);
-      setStationsData(data);
       
-      // Преобразуем данные для удобного доступа
-      if (data.stationStats && Array.isArray(data.stationStats)) {
-        const stationsMap = {};
-        data.stationStats.forEach(station => {
-          stationsMap[station.station] = {
-            waiting: station.waiting || 0,
-            connected: station.connected || 0,
-            totalUsers: station.totalUsers || 0
-          };
+      console.log('📊 Получены данные станций:', data);
+      
+      // Проверяем и нормализуем данные
+      if (data && typeof data === 'object') {
+        // Если данные пришли в правильном формате
+        if (data.stationStats && Array.isArray(data.stationStats)) {
+          console.log(`✅ Получено ${data.stationStats.length} записей о станциях`);
+          
+          // Сортируем станции для удобного отображения
+          const sortedStationStats = [...data.stationStats].sort((a, b) => {
+            // Сортируем по алфавиту
+            return a.station.localeCompare(b.station);
+          });
+          
+          setStationsData({
+            stationStats: sortedStationStats,
+            totalStats: data.totalStats || { total_connected: 0, total_waiting: 0 }
+          });
+        } else {
+          // Если нет stationStats, создаем пустой массив
+          console.log('⚠️ stationStats не найден или не массив, создаем пустой массив');
+          setStationsData({
+            stationStats: [],
+            totalStats: data.totalStats || { total_connected: 0, total_waiting: 0 }
+          });
+        }
+      } else {
+        // Если данные пришли в неправильном формате
+        console.log('⚠️ Данные пришли в неправильном формате, используем пустые данные');
+        setStationsData({
+          stationStats: [],
+          totalStats: { total_connected: 0, total_waiting: 0 }
         });
-        setStationsMapData(stationsMap);
       }
-      
-      // Сохраняем общую статистику
-      if (data.totalStats) {
-        setTotalStats({
-          total_connected: data.totalStats.total_connected || 0,
-          total_waiting: data.totalStats.total_waiting || 0
-        });
-      }
-      
-      console.log('✅ Карта станций загружена:', data);
     } catch (error) {
       console.error('❌ Ошибка загрузки карты станций:', error);
-      // Создаем пустые данные в случае ошибки
-      setStationsMapData({});
-      setTotalStats({
-        total_connected: 0,
-        total_waiting: 0
+      // В случае ошибки устанавливаем пустые данные
+      setStationsData({
+        stationStats: [],
+        totalStats: { total_connected: 0, total_waiting: 0 }
       });
     }
   };
@@ -1074,6 +1082,7 @@ export const App = () => {
           setCurrentScreen('waiting');
         }, 100);
 
+        // Загружаем карту станций
         await loadStationsMap();
         await loadRequests();
         
@@ -1225,6 +1234,9 @@ export const App = () => {
     setSelectedPosition('');
     setSelectedMood('');
     
+    // Загружаем обновленную карту станций
+    await loadStationsMap();
+    
     // Показываем уведомление
     bridge.send("VKWebAppShowSnackbar", {
       text: 'Вы вышли из комнаты станции'
@@ -1246,7 +1258,12 @@ export const App = () => {
   };
 
   // Обработчики выбора
-  const handleCitySelect = (city) => setSelectedCity(city);
+  const handleCitySelect = (city) => {
+    setSelectedCity(city);
+    // При смене города загружаем новую карту станций
+    loadStationsMap();
+  };
+  
   const handleGenderSelect = (gender) => setSelectedGender(gender);
   const handlePositionSelect = (position) => {
     const previousPosition = selectedPosition;
@@ -1401,28 +1418,46 @@ export const App = () => {
     setCurrentScreen('joined');
   };
 
-  // Рендер карты станций с отображением количества людей
-  const renderStationsMap = () => {
-    if (!helpers.stations[selectedCity]) {
-      return <div className="loading">Загрузка карты станций...</div>;
+  // Функция для получения данных по конкретной станции
+  const getStationData = (stationName) => {
+    if (!stationsData.stationStats || !Array.isArray(stationsData.stationStats)) {
+      return { waiting: 0, connected: 0, totalUsers: 0 };
     }
     
-    const allStations = helpers.stations[selectedCity];
+    const station = stationsData.stationStats.find(s => s.station === stationName);
+    if (station) {
+      return {
+        waiting: station.waiting || 0,
+        connected: station.connected || 0,
+        totalUsers: station.totalUsers || 0
+      };
+    }
     
-    return allStations.map(stationName => {
-      const stationData = stationsMapData[stationName] || {};
-      let waitingCount = stationData.waiting || 0;
-      let connectedCount = stationData.connected || 0;
-      let stationClass = 'empty';
+    return { waiting: 0, connected: 0, totalUsers: 0 };
+  };
+
+  // Рендер карты станций с отображением количества людей
+  const renderStationsMap = () => {
+    // Получаем список станций для выбранного города
+    const cityStations = helpers.stations[selectedCity];
+    
+    if (!cityStations || !Array.isArray(cityStations)) {
+      return <div className="loading">Загрузка станций для {selectedCity === 'moscow' ? 'Москвы' : 'Санкт-Петербурга'}...</div>;
+    }
+    
+    return cityStations.map(stationName => {
+      const stationData = getStationData(stationName);
+      const { waiting, connected, totalUsers } = stationData;
       
-      if (connectedCount > 0) {
+      // Определяем класс станции в зависимости от количества людей
+      let stationClass = 'empty';
+      if (connected > 0) {
         stationClass = 'connected';
-      } else if (waitingCount > 0) {
+      } else if (waiting > 0) {
         stationClass = 'waiting';
       }
       
       const isSelected = currentSelectedStation === stationName;
-      const totalUsers = stationData.totalUsers || 0;
       
       return (
         <div 
@@ -1431,22 +1466,27 @@ export const App = () => {
           onClick={() => handleStationSelect(stationName)}
         >
           <div className="station-name">{stationName}</div>
-          {totalUsers > 0 ? (
-            <div className="station-counts">
-              {waitingCount > 0 && (
-                <span className="station-count count-waiting">
-                  {waitingCount}⏳
-                </span>
-              )}
-              {connectedCount > 0 && (
-                <span className="station-count count-connected">
-                  {connectedCount}✅
-                </span>
-              )}
-            </div>
-          ) : (
-            <div className="station-empty">Пусто</div>
-          )}
+          <div className="station-counts">
+            {totalUsers > 0 ? (
+              <>
+                {waiting > 0 && (
+                  <span className="station-count count-waiting" title="В режиме ожидания">
+                    {waiting}⏳
+                  </span>
+                )}
+                {connected > 0 && (
+                  <span className="station-count count-connected" title="На станции">
+                    {connected}✅
+                  </span>
+                )}
+                {waiting === 0 && connected === 0 && (
+                  <span className="station-empty">Пусто</span>
+                )}
+              </>
+            ) : (
+              <span className="station-empty">Пусто</span>
+            )}
+          </div>
         </div>
       );
     });
@@ -1514,7 +1554,8 @@ export const App = () => {
           📱 Device: {deviceId?.substring(0, 10)}... | 
           👤 User ID: {userIdRef.current?.substring(0, 10)}... | 
           🖥️ Screen: {currentScreen} |
-          🕒 Cold Start: {isColdStart ? 'Да' : 'Нет'}
+          🏙️ City: {selectedCity} |
+          📊 Stations: {stationsData.stationStats?.length || 0}
         </div>
       );
     }
@@ -1691,11 +1732,11 @@ export const App = () => {
                 <div className="map-legend">
                   <div className="legend-item">
                     <div className="legend-color connected"></div>
-                    <span>Выбрали станцию: {totalStats.total_connected || 0}</span>
+                    <span>Выбрали станцию: {stationsData.totalStats?.total_connected || 0}</span>
                   </div>
                   <div className="legend-item">
                     <div className="legend-color waiting"></div>
-                    <span>В режиме ожидания: {totalStats.total_waiting || 0}</span>
+                    <span>В режиме ожидания: {stationsData.totalStats?.total_waiting || 0}</span>
                   </div>
                 </div>
                 
@@ -1709,6 +1750,22 @@ export const App = () => {
                   }}
                 >
                   {renderStationsMap()}
+                </div>
+                
+                <div className="stations-stats-info">
+                  <div style={{
+                    marginTop: '10px',
+                    padding: '8px',
+                    backgroundColor: '#f8f9fa',
+                    border: '1px solid #dee2e6',
+                    borderRadius: '5px',
+                    fontSize: '12px',
+                    color: '#666',
+                    textAlign: 'center'
+                  }}>
+                    Всего станций: {helpers.stations[selectedCity]?.length || 0} | 
+                    Всего пользователей онлайн: {(stationsData.totalStats?.total_connected || 0) + (stationsData.totalStats?.total_waiting || 0)}
+                  </div>
                 </div>
                 
                 {stationError && (
