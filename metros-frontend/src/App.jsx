@@ -107,12 +107,10 @@ export const App = () => {
   const [stationError, setStationError] = useState(false);
   const [restoreAttempted, setRestoreAttempted] = useState(false);
   const [isColdStart, setIsColdStart] = useState(true);
-  const [statistics, setStatistics] = useState({
-    totalUsers: 0,
-    totalConnected: 0,
+  const [roomStatistics, setRoomStatistics] = useState({
     totalWaiting: 0,
-    connectedStations: 0,
-    waitingStations: 0
+    totalConnected: 0,
+    totalUsers: 0
   });
   
   const CACHE_DURATION = 10000;
@@ -288,8 +286,8 @@ export const App = () => {
           device_id: deviceId
         });
         
-        // Загружаем статистику
-        await loadStatistics();
+        // Загружаем статистику комнаты
+        await loadRoomStatistics();
         
         // Восстанавливаем экран
         if (serverSession.is_connected && serverSession.station) {
@@ -385,8 +383,8 @@ export const App = () => {
         // Восстанавливаем состояние
         await restoreUserSession(latestSession);
         
-        // Загружаем статистику
-        await loadStatistics();
+        // Загружаем статистику комнаты
+        await loadRoomStatistics();
         
         // Сохраняем состояние
         saveSessionState({
@@ -550,8 +548,8 @@ export const App = () => {
     }
   };
 
-  // Загрузка статистики
-  const loadStatistics = async () => {
+  // Загрузка статистики комнаты
+  const loadRoomStatistics = async () => {
     try {
       const users = await api.getUsers();
       const activeUsers = users.filter(user => user.online === true);
@@ -560,37 +558,20 @@ export const App = () => {
       const totalConnected = activeUsers.filter(user => user.is_connected === true).length;
       const totalWaiting = activeUsers.filter(user => user.is_waiting === true).length;
       
-      // Получаем уникальные станции с активными пользователями
-      const connectedStations = new Set(
-        activeUsers
-          .filter(user => user.is_connected && user.station)
-          .map(user => user.station)
-      ).size;
-      
-      const waitingStations = new Set(
-        activeUsers
-          .filter(user => user.is_waiting)
-          .map(user => user.city || 'unknown')
-      ).size;
-      
-      setStatistics({
+      setRoomStatistics({
         totalUsers,
         totalConnected,
-        totalWaiting,
-        connectedStations,
-        waitingStations
+        totalWaiting
       });
       
-      console.log('📊 Статистика загружена:', {
+      console.log('📊 Статистика комнаты загружена:', {
         totalUsers,
         totalConnected,
-        totalWaiting,
-        connectedStations,
-        waitingStations
+        totalWaiting
       });
       
     } catch (error) {
-      console.error('❌ Ошибка загрузки статистики:', error);
+      console.error('❌ Ошибка загрузки статистики комнаты:', error);
     }
   };
 
@@ -601,13 +582,11 @@ export const App = () => {
         if (currentScreen === 'waiting') {
           await loadStationsMap();
           await loadRequests();
-          await loadStatistics();
+          await loadRoomStatistics();
         } else if (currentScreen === 'joined' && currentGroup) {
           await loadGroupMembers(currentGroup.station);
           await loadRequests();
-          await loadStatistics();
-        } else if (currentScreen === 'setup') {
-          await loadStatistics();
+          await loadRoomStatistics();
         }
         await improvedPingActivity();
       } catch (error) {
@@ -627,7 +606,7 @@ export const App = () => {
       
       // Обновляем общую статистику
       if (data.totalStats) {
-        setStatistics(prev => ({
+        setRoomStatistics(prev => ({
           ...prev,
           totalConnected: data.totalStats.total_connected || 0,
           totalWaiting: data.totalStats.total_waiting || 0
@@ -687,8 +666,8 @@ export const App = () => {
       setUsersCache(activeUsers);
       setCacheTimestamp(now);
       
-      // Обновляем статистику
-      await loadStatistics();
+      // Обновляем статистику комнаты
+      await loadRoomStatistics();
       
       return activeUsers;
     } catch (error) {
@@ -897,8 +876,8 @@ export const App = () => {
             await loadRequests();
           }
           
-          // Обновляем статистику
-          await loadStatistics();
+          // Обновляем статистику комнаты
+          await loadRoomStatistics();
           
         } catch (error) {
           console.error('❌ Ошибка восстановления сессии:', error);
@@ -1221,8 +1200,8 @@ export const App = () => {
       }
       
       if (createdUser) {
-        // Загружаем статистику
-        await loadStatistics();
+        // Загружаем статистику комнаты
+        await loadRoomStatistics();
         
         // Сохраняем состояние сессии
         saveSessionState({
@@ -1321,8 +1300,8 @@ export const App = () => {
       setCurrentGroup(groupData);
       setCurrentScreen('joined');
       
-      // Загружаем статистику
-      await loadStatistics();
+      // Загружаем статистику комнаты
+      await loadRoomStatistics();
       
       // Сохраняем состояние сессии
       saveSessionState({
@@ -1373,8 +1352,8 @@ export const App = () => {
         });
         console.log('✅ Пользователь вышел из группы');
         
-        // Обновляем статистику
-        await loadStatistics();
+        // Обновляем статистику комнаты
+        await loadRoomStatistics();
         
         // Обновляем сохраненное состояние
         saveSessionState({
@@ -1657,64 +1636,23 @@ export const App = () => {
     return null;
   };
 
-  // Рендер статистики
-  const renderStatistics = () => {
+  // Рендер статистики комнаты
+  const renderRoomStatistics = () => {
     return (
-      <div className="statistics-container">
-        <h4>📊 Общая статистика</h4>
+      <div className="room-statistics">
+        <h4>📊 Статистика комнаты</h4>
         <div className="statistics-grid">
           <div className="statistic-item">
-            <div className="statistic-value">{statistics.totalUsers}</div>
+            <div className="statistic-value">{roomStatistics.totalUsers}</div>
             <div className="statistic-label">Всего онлайн</div>
           </div>
           <div className="statistic-item">
-            <div className="statistic-value">{statistics.totalConnected}</div>
+            <div className="statistic-value">{roomStatistics.totalConnected}</div>
             <div className="statistic-label">Выбрали станцию</div>
           </div>
           <div className="statistic-item">
-            <div className="statistic-value">{statistics.totalWaiting}</div>
+            <div className="statistic-value">{roomStatistics.totalWaiting}</div>
             <div className="statistic-label">В ожидании</div>
-          </div>
-          <div className="statistic-item">
-            <div className="statistic-value">{statistics.connectedStations}</div>
-            <div className="statistic-label">Активных станций</div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // Рендер статистики комнаты
-  const renderRoomStatistics = () => {
-    const stationData = stationsData.stationStats?.find(station => 
-      station.station === currentSelectedStation
-    );
-    
-    if (!stationData) return null;
-    
-    return (
-      <div className="room-statistics">
-        <div className="room-stats-grid">
-          <div className="room-stat-item">
-            <div className="room-stat-icon">👥</div>
-            <div className="room-stat-info">
-              <div className="room-stat-value">{stationData.totalUsers || 0}</div>
-              <div className="room-stat-label">Всего на станции</div>
-            </div>
-          </div>
-          <div className="room-stat-item">
-            <div className="room-stat-icon">✅</div>
-            <div className="room-stat-info">
-              <div className="room-stat-value">{stationData.connected || 0}</div>
-              <div className="room-stat-label">Подключились</div>
-            </div>
-          </div>
-          <div className="room-stat-item">
-            <div className="room-stat-icon">⏳</div>
-            <div className="room-stat-info">
-              <div className="room-stat-value">{stationData.waiting || 0}</div>
-              <div className="room-stat-label">В ожидании</div>
-            </div>
           </div>
         </div>
       </div>
@@ -1770,7 +1708,7 @@ export const App = () => {
                 <button className="nav-btn" onClick={showJoinedRoom}>3. Комната станции</button>
               </div>
               
-              {renderStatistics()}
+              {renderRoomStatistics()}
               
               <p>Укажите ваш город и пол</p>
               
@@ -1884,7 +1822,7 @@ export const App = () => {
                 <button className="nav-btn" onClick={showJoinedRoom}>3. Комната станции</button>
               </div>
               
-              {renderStatistics()}
+              {renderRoomStatistics()}
               
               <p style={{fontSize: '12px'}}> 🔴 Выберите станцию на карте для присоединения </p>
               <p style={{fontSize: '12px'}}> 🔴 Цвет верхней одежды или стиль </p>
@@ -1915,8 +1853,6 @@ export const App = () => {
                 >
                   {renderStationsMap()}
                 </div>
-                
-                {currentSelectedStation && renderRoomStatistics()}
                 
                 {stationError && (
                   <div style={{
@@ -2034,7 +1970,6 @@ export const App = () => {
                 <button className="nav-btn active">3. Комната станции</button>
               </div>
               
-              {renderStatistics()}
               {renderRoomStatistics()}
               
               <div className="room-status-info">
