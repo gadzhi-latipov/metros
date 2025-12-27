@@ -2,54 +2,16 @@ import { useState, useEffect, useRef } from 'react';
 import bridge from '@vkontakte/vk-bridge';
 import './App.css';
 import { api, helpers } from './services/api';
+// import { TimerComponent } from './TimerComponent';
 
-// Генерация уникального ID устройства на основе VK User ID
-const generateDeviceId = (vkUserId = null) => {
-  // Пробуем получить из VK Storage (более устойчиво к очистке кеша)
-  let deviceId = localStorage.getItem('metro_deviceId');
-  
+// Генерация уникального ID устройства
+const generateDeviceId = () => {
+  let deviceId = localStorage.getItem('deviceId');
   if (!deviceId) {
-    // Пробуем получить из VK WebApp Storage
-    try {
-      const storedId = sessionStorage.getItem('metro_vk_device_id');
-      if (storedId) {
-        deviceId = storedId;
-      }
-    } catch (e) {
-      console.log('VK Storage недоступен');
-    }
+    deviceId = 'device_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+    localStorage.setItem('deviceId', deviceId);
   }
-  
-  if (!deviceId) {
-    // Генерируем новый ID с привязкой к VK User ID если есть
-    if (vkUserId) {
-      deviceId = 'vk_' + vkUserId + '_' + Date.now() + '_' + Math.random().toString(36).substr(2, 8);
-    } else {
-      // Генерация для гостей
-      deviceId = 'guest_' + Date.now() + '_' + Math.random().toString(36).substr(2, 12);
-    }
-    
-    // Сохраняем в нескольких местах для надежности
-    localStorage.setItem('metro_deviceId', deviceId);
-    try {
-      sessionStorage.setItem('metro_vk_device_id', deviceId);
-    } catch (e) {}
-  }
-  
   return deviceId;
-};
-
-// Генерация уникального ID сессии
-const generateSessionId = (vkUserId = null) => {
-  const base = vkUserId ? `vk_${vkUserId}_` : 'session_';
-  const sessionId = base + Date.now() + '_' + Math.random().toString(36).substr(2, 12);
-  
-  // Сохраняем в sessionStorage для быстрого восстановления
-  try {
-    sessionStorage.setItem('metro_session_id', sessionId);
-  } catch (e) {}
-  
-  return sessionId;
 };
 
 export const App = () => {
@@ -78,63 +40,51 @@ export const App = () => {
   const [deviceId, setDeviceId] = useState('');
   const [isSessionRestoring, setIsSessionRestoring] = useState(false);
   const [nicknameError, setNicknameError] = useState(false);
-  const [clothingColorError, setClothingColorError] = useState(false);
-  const [stationError, setStationError] = useState(false);
+  const [clothingColorError, setClothingColorError] = useState(false); // НОВОЕ: ошибка цвета одежды
+  const [stationError, setStationError] = useState(false); // НОВОЕ: ошибка выбора станции
   
   const CACHE_DURATION = 10000;
   const PING_INTERVAL = 15000;
-  const SESSION_TIMEOUT = 300000; // 5 минут
 
   const userIdRef = useRef(null);
   const globalRefreshIntervalRef = useRef(null);
   const sessionIdRef = useRef('');
   const vkUserIdRef = useRef(null);
   const nicknameInputRef = useRef(null);
-  const clothingColorInputRef = useRef(null);
-  const metroMapRef = useRef(null);
-  const lastActiveRef = useRef(Date.now());
+  const clothingColorInputRef = useRef(null); // НОВОЕ: ссылка на поле цвета одежды
+  const metroMapRef = useRef(null); // НОВОЕ: ссылка на карту станций
+
+  // Генерация уникального ID сессии
+  const generateSessionId = () => {
+    return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+  };
 
   // Основная инициализация приложения
   useEffect(() => {
     console.log('✅ React компонент App загружен');
     
+    // Инициализация устройства
+    const generatedDeviceId = generateDeviceId();
+    setDeviceId(generatedDeviceId);
+    
+    // Генерация ID сессии
+    const sessionId = generateSessionId();
+    sessionIdRef.current = sessionId;
+    
+    console.log('📱 Идентификатор устройства:', generatedDeviceId);
+    console.log('🔑 ID сессии:', sessionId);
+    
     // Инициализация VK Bridge
     bridge.send("VKWebAppInit")
-      .then(async (data) => {
+      .then((data) => {
         if (data.result) {
           console.log('✅ VK Bridge инициализирован');
-          
-          try {
-            // Загружаем данные пользователя VK
-            const user = await bridge.send('VKWebAppGetUserInfo');
-            setUser(user);
-            vkUserIdRef.current = user.id;
-            console.log('👤 Данные пользователя VK загружены:', user.id);
-            
-            // Генерируем deviceId на основе VK User ID
-            const generatedDeviceId = generateDeviceId(user.id);
-            setDeviceId(generatedDeviceId);
-            
-            // Генерация ID сессии
-            const sessionId = generateSessionId(user.id);
-            sessionIdRef.current = sessionId;
-            
-            console.log('📱 Идентификатор устройства:', generatedDeviceId);
-            console.log('🔑 ID сессии:', sessionId);
-            
-            // Восстанавливаем сессию
-            await checkAndRestoreSession(generatedDeviceId, sessionId);
-          } catch (error) {
-            console.error('❌ Ошибка загрузки пользователя VK:', error);
-            // Пробуем как гость
-            await initializeAsGuest();
-          }
+        } else {
+          console.error('❌ Ошибка инициализации VK Bridge');
         }
       })
       .catch((error) => {
         console.error('❌ Ошибка инициализации VK Bridge:', error);
-        // Пробуем инициализировать как гость
-        initializeAsGuest();
       });
 
     // Подписка на события VK Bridge
@@ -155,32 +105,43 @@ export const App = () => {
           break;
         case 'VKWebAppViewRestore':
           setAppState('active');
-          // Обновляем активность при возвращении в приложение
-          lastActiveRef.current = Date.now();
-          if (userIdRef.current) {
-            updateUserActivity();
-          }
           break;
         default:
           break;
       }
     });
 
-    // Запуск глобального обновления
-    const cleanupGlobalRefresh = startGlobalRefresh();
-
-    // Мониторинг активности пользователя
-    const activityEvents = ['mousedown', 'keydown', 'touchstart', 'scroll'];
-    const updateActivity = () => {
-      lastActiveRef.current = Date.now();
-      if (userIdRef.current && Date.now() - lastPingTime > 5000) {
-        updateUserActivity();
+    // Загрузка данных пользователя VK
+    async function fetchUserData() {
+      try {
+        const user = await bridge.send('VKWebAppGetUserInfo');
+        setUser(user);
+        vkUserIdRef.current = user.id;
+        console.log('👤 Данные пользователя VK загружены:', user.id);
+      } catch (error) {
+        console.error('❌ Ошибка загрузки пользователя:', error);
+      }
+    }
+    
+    fetchUserData();
+    
+    // Восстановление сессии пользователя
+    const restoreSession = async () => {
+      setIsSessionRestoring(true);
+      try {
+        await checkAndRestoreSession(generatedDeviceId, sessionId);
+      } catch (error) {
+        console.error('❌ Ошибка восстановления сессии:', error);
+        setCurrentScreen('setup');
+      } finally {
+        setIsSessionRestoring(false);
       }
     };
-
-    activityEvents.forEach(event => {
-      window.addEventListener(event, updateActivity);
-    });
+    
+    restoreSession();
+    
+    // Запуск глобального обновления
+    const cleanupGlobalRefresh = startGlobalRefresh();
 
     return () => {
       cleanupGlobalRefresh();
@@ -188,204 +149,52 @@ export const App = () => {
       if (globalRefreshIntervalRef.current) {
         clearInterval(globalRefreshIntervalRef.current);
       }
-      
-      activityEvents.forEach(event => {
-        window.removeEventListener(event, updateActivity);
-      });
-      
-      // Сохраняем состояние при размонтировании
-      saveAppState();
     };
   }, []);
-
-  // Инициализация как гостя (без VK авторизации)
-  const initializeAsGuest = async () => {
-    try {
-      // Генерируем deviceId для гостя
-      const generatedDeviceId = generateDeviceId(null);
-      setDeviceId(generatedDeviceId);
-      
-      // Генерация ID сессии
-      const sessionId = generateSessionId(null);
-      sessionIdRef.current = sessionId;
-      
-      console.log('👤 Инициализация как гостя');
-      console.log('📱 Device ID:', generatedDeviceId);
-      console.log('🔑 Session ID:', sessionId);
-      
-      // Пробуем восстановить сессию
-      await checkAndRestoreSession(generatedDeviceId, sessionId);
-    } catch (error) {
-      console.error('❌ Ошибка инициализации гостя:', error);
-      setCurrentScreen('setup');
-    }
-  };
-
-  // Сохранение состояния приложения
-  const saveAppState = () => {
-    try {
-      const appState = {
-        screen: currentScreen,
-        nickname: nickname,
-        city: selectedCity,
-        gender: selectedGender,
-        station: currentSelectedStation,
-        group: currentGroup,
-        timestamp: Date.now()
-      };
-      
-      localStorage.setItem('metro_app_state', JSON.stringify(appState));
-      sessionStorage.setItem('metro_last_state', JSON.stringify({
-        screen: currentScreen,
-        timestamp: Date.now()
-      }));
-    } catch (e) {
-      console.log('Не удалось сохранить состояние');
-    }
-  };
-
-  // Восстановление состояния приложения
-  const restoreAppState = async (userData) => {
-    try {
-      // Восстанавливаем из localStorage
-      const savedState = localStorage.getItem('metro_app_state');
-      if (savedState) {
-        const state = JSON.parse(savedState);
-        
-        // Проверяем, не устарело ли состояние (больше 1 часа)
-        if (Date.now() - state.timestamp < 3600000) {
-          setNickname(state.nickname || userData.name || '');
-          setSelectedCity(state.city || userData.city || 'spb');
-          setSelectedGender(state.gender || userData.gender || 'male');
-          setCurrentSelectedStation(state.station || userData.station || null);
-          
-          if (state.group) {
-            setCurrentGroup(state.group);
-          }
-          
-          // Если был в комнате станции, проверяем актуальность
-          if (state.screen === 'joined' && state.station) {
-            // Загружаем данные станции
-            await loadStationsMap();
-            
-            // Проверяем, что пользователь все еще в этой станции
-            if (userData.station === state.station && userData.is_connected) {
-              setCurrentScreen('joined');
-              setTimeout(() => {
-                loadGroupMembers();
-                loadRequests(true);
-              }, 100);
-              return true;
-            }
-          } else if (state.screen === 'waiting') {
-            setCurrentScreen('waiting');
-            await loadStationsMap();
-            await loadRequests();
-            return true;
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Ошибка восстановления состояния:', error);
-    }
-    
-    return false;
-  };
 
   // Проверка и восстановление сессии
   const checkAndRestoreSession = async (deviceId, sessionId) => {
     try {
-      setIsSessionRestoring(true);
-      
       const users = await api.getUsers();
       
-      // Ищем активную сессию по нескольким критериям
-      let activeSession = null;
-      
-      // 1. По deviceId (основной способ)
-      activeSession = users.find(user => 
+      // Ищем активную сессию с этого устройства
+      const activeSession = users.find(user => 
         user.device_id === deviceId && 
-        user.online === true
+        (user.online === true || 
+         (user.last_seen && Date.now() - new Date(user.last_seen).getTime() < 300000)) // 5 минут
       );
-      
-      // 2. По VK User ID (если есть)
-      if (!activeSession && vkUserIdRef.current) {
-        activeSession = users.find(user => 
-          user.vk_user_id === vkUserIdRef.current && 
-          user.online === true
-        );
-      }
-      
-      // 3. По недавней активности (в пределах таймаута сессии)
-      if (!activeSession) {
-        const timeoutTime = new Date(Date.now() - SESSION_TIMEOUT).toISOString();
-        
-        activeSession = users.find(user => {
-          // Проверяем совпадение deviceId и недавнюю активность
-          if (user.device_id === deviceId && user.last_seen && user.last_seen > timeoutTime) {
-            return true;
-          }
-          
-          // Проверяем совпадение VK ID и недавнюю активность
-          if (vkUserIdRef.current && 
-              user.vk_user_id === vkUserIdRef.current && 
-              user.last_seen && 
-              user.last_seen > timeoutTime) {
-            return true;
-          }
-          
-          return false;
-        });
-      }
       
       if (activeSession) {
         console.log('🔄 Найдена активная сессия:', activeSession.id);
         
         userIdRef.current = activeSession.id;
         
-        // Обновляем сессию с новыми данными
+        // Обновляем сессию
         await api.updateUser(activeSession.id, {
           session_id: sessionId,
           online: true,
           last_seen: new Date().toISOString(),
-          device_id: deviceId,
-          vk_user_id: vkUserIdRef.current
+          device_id: deviceId
         });
         
-        // Восстанавливаем состояние из сохраненного или из данных пользователя
-        const stateRestored = await restoreAppState(activeSession);
+        // Восстанавливаем состояние
+        await restoreUserSession(activeSession);
         
-        if (!stateRestored) {
-          // Если не удалось восстановить состояние, восстанавливаем из данных пользователя
-          await restoreUserFromServer(activeSession);
-        }
-        
-        // Очищаем старые сессии
+        // Очищаем старые сессии с этого устройства
         await cleanupOldSessions(deviceId, sessionId);
       } else {
         // Нет активной сессии - начинаем с настройки
         console.log('🆕 Нет активной сессии, начинаем с настройки');
         setCurrentScreen('setup');
-        
-        // Пробуем восстановить никнейм из сохраненного состояния
-        const savedState = localStorage.getItem('metro_app_state');
-        if (savedState) {
-          const state = JSON.parse(savedState);
-          if (state.nickname) {
-            setNickname(state.nickname);
-          }
-        }
       }
     } catch (error) {
       console.error('❌ Ошибка проверки сессии:', error);
       setCurrentScreen('setup');
-    } finally {
-      setIsSessionRestoring(false);
     }
   };
 
-  // Восстановление пользователя из данных сервера
-  const restoreUserFromServer = async (userData) => {
+  // Восстановление сессии пользователя
+  const restoreUserSession = async (userData) => {
     try {
       // Восстанавливаем данные из профиля
       setNickname(userData.name || '');
@@ -411,8 +220,10 @@ export const App = () => {
         await loadStationsMap();
         
         // Переходим в комнату станции
-        setCurrentScreen('joined');
-        console.log('✅ Восстановлена сессия в комнате станции:', userData.station);
+        setTimeout(() => {
+          setCurrentScreen('joined');
+          console.log('✅ Восстановлена сессия в комнате станции:', userData.station);
+        }, 100);
         
         // Загружаем участников группы
         setTimeout(() => {
@@ -434,7 +245,7 @@ export const App = () => {
         setCurrentScreen('setup');
       }
     } catch (error) {
-      console.error('❌ Ошибка восстановления из сервера:', error);
+      console.error('❌ Ошибка восстановления сессии:', error);
       setCurrentScreen('setup');
     }
   };
@@ -443,30 +254,14 @@ export const App = () => {
   const cleanupOldSessions = async (deviceId, currentSessionId) => {
     try {
       const users = await api.getUsers();
-      const timeoutTime = new Date(Date.now() - SESSION_TIMEOUT).toISOString();
+      const now = Date.now();
       
-      // Находим старые сессии
-      const oldSessions = users.filter(user => {
-        // Сессии с таким же deviceId, но другой sessionId
-        if (user.device_id === deviceId && user.session_id !== currentSessionId) {
-          return true;
-        }
-        
-        // Сессии этого же VK пользователя, но другой deviceId и старая активность
-        if (vkUserIdRef.current && 
-            user.vk_user_id === vkUserIdRef.current && 
-            user.device_id !== deviceId &&
-            (!user.last_seen || user.last_seen < timeoutTime)) {
-          return true;
-        }
-        
-        // Очень старые сессии (больше 1 дня)
-        if (user.last_seen && new Date(user.last_seen) < new Date(Date.now() - 86400000)) {
-          return true;
-        }
-        
-        return false;
-      });
+      // Находим старые сессии с этого устройства
+      const oldSessions = users.filter(user => 
+        user.device_id === deviceId && 
+        user.id !== userIdRef.current &&
+        user.session_id !== currentSessionId
+      );
       
       // Помечаем старые сессии как неактивные
       for (const session of oldSessions) {
@@ -474,8 +269,7 @@ export const App = () => {
           await api.updateUser(session.id, {
             online: false,
             is_connected: false,
-            is_waiting: false,
-            status: 'Сессия завершена'
+            is_waiting: false
           });
           console.log('🧹 Деактивирована старая сессия:', session.id);
         } catch (error) {
@@ -498,7 +292,7 @@ export const App = () => {
           await loadGroupMembers();
           await loadRequests();
         }
-        await updateUserActivity();
+        await improvedPingActivity();
       } catch (error) {
         console.error('❌ Ошибка глобального обновления:', error);
       }
@@ -506,51 +300,6 @@ export const App = () => {
     
     globalRefreshIntervalRef.current = interval;
     return () => clearInterval(interval);
-  };
-
-  // Обновление активности пользователя
-  const updateUserActivity = async () => {
-    if (!userIdRef.current) return false;
-    
-    const now = Date.now();
-    if (now - lastPingTime < 5000) return false; // Не чаще чем раз в 5 секунд
-    
-    try {
-      const updateData = { 
-        online: true,
-        last_seen: new Date().toISOString(),
-        session_id: sessionIdRef.current,
-        device_id: deviceId,
-        vk_user_id: vkUserIdRef.current,
-        ...(currentScreen === 'joined' && currentGroup && { 
-          is_connected: true,
-          is_waiting: false,
-          station: currentGroup.station 
-        }),
-        ...(currentScreen === 'waiting' && { 
-          is_connected: false,
-          is_waiting: true,
-          station: '' 
-        }),
-        ...(currentScreen === 'setup' && { 
-          is_connected: false,
-          is_waiting: false 
-        })
-      };
-      
-      await api.updateUser(userIdRef.current, updateData);
-      setLastPingTime(now);
-      
-      // Периодически проверяем и удаляем неактивные сессии
-      if (now % 60000 < 10000) { // Раз в минуту
-        await cleanupOldSessions(deviceId, sessionIdRef.current);
-      }
-      
-      return true;
-    } catch (error) {
-      console.error('Ошибка обновления активности:', error);
-      return false;
-    }
   };
 
   // Загрузка статистики станций
@@ -667,7 +416,12 @@ export const App = () => {
       // Если был в joined, восстанавливаем сессию
       if (userIdRef.current && (currentScreen === 'joined' || currentScreen === 'waiting')) {
         try {
-          await updateUserActivity();
+          await api.updateUser(userIdRef.current, {
+            online: true,
+            last_seen: new Date().toISOString(),
+            session_id: sessionIdRef.current,
+            device_id: deviceId
+          });
           console.log('✅ Сессия восстановлена после потери соединения');
           
           // Обновляем данные
@@ -696,11 +450,24 @@ export const App = () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [currentScreen, currentGroup]);
+  }, [currentScreen, currentGroup, deviceId]);
 
   // Сохранение состояний в localStorage
   useEffect(() => {
-    saveAppState();
+    localStorage.setItem('selectedCity', selectedCity);
+    localStorage.setItem('selectedGender', selectedGender);
+    localStorage.setItem('selectedPosition', selectedPosition);
+    localStorage.setItem('selectedMood', selectedMood);
+    localStorage.setItem('selectedStation', currentSelectedStation);
+    localStorage.setItem('selectedTimerMinutes', selectedMinutes);
+    localStorage.setItem('nickname', nickname);
+    localStorage.setItem('clothingColor', clothingColor);
+    localStorage.setItem('wagonNumber', wagonNumber);
+    localStorage.setItem('currentScreen', currentScreen);
+    
+    if (currentGroup) {
+      localStorage.setItem('currentGroup', JSON.stringify(currentGroup));
+    }
   }, [
     selectedCity, selectedGender, selectedPosition, selectedMood,
     currentSelectedStation, selectedMinutes, nickname, clothingColor,
@@ -718,19 +485,24 @@ export const App = () => {
     }
   }, [selectedPosition, selectedMood]);
 
-  // Валидация никнейма
+
+  // НОВОЕ: Валидация никнейма
   const validateNickname = () => {
     const trimmedNickname = nickname.trim();
     if (!trimmedNickname) {
       setNicknameError(true);
       
+      // Визуальное выделение поля
       if (nicknameInputRef.current) {
         nicknameInputRef.current.style.border = '2px solid #ff4444';
         nicknameInputRef.current.style.backgroundColor = '#fff5f5';
         nicknameInputRef.current.style.boxShadow = '0 0 0 1px #ff4444';
+        
+        // Фокусировка на поле
         nicknameInputRef.current.focus();
       }
       
+      // Уведомление VK
       bridge.send("VKWebAppShowSnackbar", {
         text: '❌ Пожалуйста, введите ваш никнейм'
       });
@@ -748,19 +520,23 @@ export const App = () => {
     return true;
   };
 
-  // Валидация цвета одежды
+  // НОВОЕ: Валидация цвета одежды
   const validateClothingColor = () => {
     const trimmedColor = clothingColor.trim();
     if (!trimmedColor) {
       setClothingColorError(true);
       
+      // Визуальное выделение поля
       if (clothingColorInputRef.current) {
         clothingColorInputRef.current.style.border = '2px solid #ff4444';
         clothingColorInputRef.current.style.backgroundColor = '#fff5f5';
         clothingColorInputRef.current.style.boxShadow = '0 0 0 1px #ff4444';
+        
+        // Фокусировка на поле
         clothingColorInputRef.current.focus();
       }
       
+      // Уведомление VK
       bridge.send("VKWebAppShowSnackbar", {
         text: '❌ Пожалуйста, укажите цвет верхней одежды или стиль'
       });
@@ -778,16 +554,18 @@ export const App = () => {
     return true;
   };
 
-  // Валидация выбора станции
+  // НОВОЕ: Валидация выбора станции
   const validateStation = () => {
     if (!currentSelectedStation) {
       setStationError(true);
       
+      // Визуальное выделение карты станций
       if (metroMapRef.current) {
         metroMapRef.current.style.border = '2px solid #ff4444';
         metroMapRef.current.style.boxShadow = '0 0 10px rgba(255, 68, 68, 0.3)';
       }
       
+      // Уведомление VK
       bridge.send("VKWebAppShowSnackbar", {
         text: '❌ Пожалуйста, выберите станцию на карте'
       });
@@ -804,7 +582,7 @@ export const App = () => {
     return true;
   };
 
-  // Сброс ошибки при изменении никнейма
+  // НОВОЕ: Сброс ошибки при изменении никнейма
   const handleNicknameChange = (e) => {
     setNickname(e.target.value);
     if (nicknameError) {
@@ -817,7 +595,7 @@ export const App = () => {
     }
   };
 
-  // Сброс ошибки при изменении цвета одежды
+  // НОВОЕ: Сброс ошибки при изменении цвета одежды
   const handleClothingColorChange = (e) => {
     setClothingColor(e.target.value);
     if (clothingColorError) {
@@ -830,7 +608,7 @@ export const App = () => {
     }
   };
 
-  // Сброс ошибки при выборе станции
+  // НОВОЕ: Сброс ошибки при выборе станции
   const handleStationSelect = (stationName) => {
     setCurrentSelectedStation(stationName);
     if (stationError) {
@@ -846,6 +624,7 @@ export const App = () => {
   const handleEnterWaitingRoom = async () => {
     console.log('🚪 === НАЧАЛО handleEnterWaitingRoom ===');
     
+    // Валидация никнейма
     if (!validateNickname()) {
       return;
     }
@@ -853,11 +632,10 @@ export const App = () => {
     setIsLoading(true);
 
     try {
-      // Проверяем, нет ли уже активной сессии
+      // Проверяем, нет ли уже активной сессии с этого устройства
       const users = await api.getUsers();
       const existingSession = users.find(user => 
-        (user.device_id === deviceId || 
-         (vkUserIdRef.current && user.vk_user_id === vkUserIdRef.current)) && 
+        user.device_id === deviceId && 
         user.online === true
       );
       
@@ -875,13 +653,12 @@ export const App = () => {
           online: true,
           is_waiting: true,
           is_connected: false,
-          last_seen: new Date().toISOString(),
-          status: 'В режиме ожидания'
+          last_seen: new Date().toISOString()
         });
         userIdRef.current = existingSession.id;
         console.log('🔄 Используем существующую сессию:', existingSession.id);
       } else {
-        // Создаем нового пользователя
+        // Создаем нового пользователя с привязкой к устройству
         const userData = {
           name: nickname.trim(),
           station: '',
@@ -912,18 +689,15 @@ export const App = () => {
       }
       
       if (createdUser) {
-        setCurrentScreen('waiting');
+        setTimeout(() => {
+          setCurrentScreen('waiting');
+        }, 100);
 
         await loadStationsMap();
         await loadRequests();
         
         // Очищаем старые сессии
         await cleanupOldSessions(deviceId, sessionIdRef.current);
-        
-        // Показываем уведомление
-        bridge.send("VKWebAppShowSnackbar", {
-          text: '✅ Вы вошли в комнату ожидания'
-        });
       }
     } catch (error) {
       console.error('❌ ОШИБКА в handleEnterWaitingRoom:', error);
@@ -939,18 +713,21 @@ export const App = () => {
   const handleConfirmStation = async () => {
     console.log('📍 === НАЧАЛО handleConfirmStation ===');
     
+    // Проверка цвета одежды
     if (!validateClothingColor()) {
       return;
     }
     
-    if (!validateStation()) {
-      return;
-    }
-
+    // Проверка никнейма
     if (!nickname || nickname.trim() === '') {
       bridge.send("VKWebAppShowSnackbar", {
         text: '❌ Пожалуйста, введите ваш никнейм'
       });
+      return;
+    }
+    
+    // Проверка выбора станции
+    if (!validateStation()) {
       return;
     }
 
@@ -985,6 +762,7 @@ export const App = () => {
           setCurrentGroup(groupData);
           setCurrentScreen('joined');
           
+          // Показываем успешное уведомление
           bridge.send("VKWebAppShowSnackbar", {
             text: `✅ Вы присоединились к станции ${currentSelectedStation}`
           });
@@ -1029,51 +807,10 @@ export const App = () => {
     setSelectedPosition('');
     setSelectedMood('');
     
+    // Показываем уведомление
     bridge.send("VKWebAppShowSnackbar", {
       text: 'Вы вышли из комнаты станции'
     });
-  };
-
-  // Выйти из всех сессий (для отладки)
-  const logoutFromAllSessions = async () => {
-    try {
-      const users = await api.getUsers();
-      
-      // Находим все сессии этого пользователя
-      const userSessions = users.filter(user => 
-        user.device_id === deviceId || 
-        (vkUserIdRef.current && user.vk_user_id === vkUserIdRef.current)
-      );
-      
-      // Деактивируем все сессии
-      for (const session of userSessions) {
-        await api.updateUser(session.id, {
-          online: false,
-          is_connected: false,
-          is_waiting: false,
-          status: 'Выйти из всех сессий'
-        });
-      }
-      
-      // Очищаем локальное хранилище
-      localStorage.removeItem('metro_deviceId');
-      localStorage.removeItem('metro_app_state');
-      
-      // Генерируем новый deviceId
-      const newDeviceId = generateDeviceId(vkUserIdRef.current);
-      setDeviceId(newDeviceId);
-      
-      // Сбрасываем состояние
-      userIdRef.current = null;
-      setCurrentScreen('setup');
-      
-      bridge.send("VKWebAppShowSnackbar", {
-        text: '✅ Вы вышли из всех сессий'
-      });
-      
-    } catch (error) {
-      console.error('❌ Ошибка выхода из всех сессий:', error);
-    }
   };
 
   // Генерация статуса пользователя
@@ -1149,12 +886,45 @@ export const App = () => {
     }
   };
 
+  // Пинг активности
+  const improvedPingActivity = async () => {
+    if (!userIdRef.current) return false;
+    
+    const now = Date.now();
+    if (now - lastPingTime < PING_INTERVAL) return false;
+    
+    try {
+      const updateData = { 
+        online: true,
+        is_connected: currentScreen === 'joined',
+        session_id: sessionIdRef.current,
+        device_id: deviceId,
+        last_seen: new Date().toISOString(),
+        ...(currentScreen === 'joined' && currentGroup && { 
+          station: currentGroup.station 
+        })
+      };
+      
+      await api.pingActivity(userIdRef.current, updateData);
+      setLastPingTime(now);
+      
+      if (currentScreen === 'joined') {
+        await loadGroupMembers();
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Ошибка пинга активности:', error);
+      return false;
+    }
+  };
+
   // Обработчик закрытия страницы
   useEffect(() => {
     const handleBeforeUnload = async () => {
       if (userIdRef.current) {
+        // Отмечаем пользователя как оффлайн, но сохраняем привязку к устройству
         try {
-          // Отмечаем пользователя как оффлайн, но сохраняем привязку
           await api.updateUser(userIdRef.current, { 
             online: false,
             last_seen: new Date().toISOString(),
@@ -1178,9 +948,11 @@ export const App = () => {
   const showSetup = () => setCurrentScreen('setup');
   const showWaitingRoom = () => {
     if (!userIdRef.current) {
+      // Проверяем никнейм перед переходом
       if (!validateNickname()) {
         return;
       }
+      // Если никнейм валиден, но userId еще нет, показываем сообщение
       bridge.send("VKWebAppShowSnackbar", {
         text: 'Сначала создайте профиль'
       });
@@ -1292,6 +1064,12 @@ export const App = () => {
               )}
             </div>
           </div>
+          {/* {user.show_timer && user.timer_seconds > 0 && (
+            <div className="user-timer-display">
+              <div className="timer-label">⏰ Осталось:</div>
+              <div className="timer-value">{helpers.formatTime(user.timer_seconds)}</div>
+            </div>
+          )} */}
         </div>
       );
     });
@@ -1577,6 +1355,22 @@ export const App = () => {
                   </small>
                 </div>
                 
+                 {/* <TimerComponent 
+                  selectedMinutes={selectedMinutes}
+                  onTimerSelect={handleTimerSelect}
+                  userId={userIdRef.current}
+                  onStatusUpdate={async (data) => {
+                    if (userIdRef.current) {
+                      await api.updateUser(userIdRef.current, {
+                        ...data,
+                        session_id: sessionIdRef.current,
+                        device_id: deviceId,
+                        last_seen: new Date().toISOString()
+                      });
+                    }
+                  }}
+                />  */}
+                
                 {(clothingColorError || stationError) && (
                   <div style={{
                     marginTop: '15px',
@@ -1705,32 +1499,9 @@ export const App = () => {
         </div>
         
         <footer>
-          &copy; 2025 | Гаджи Латипов | Метрос | Санкт-Петербург
+          &copy; 2025 | Гаджи Латипов | Метрос | Санкт  Петербург
         </footer>
       </div>
-      
-      {/* Кнопка для отладки сессий */}
-      {process.env.NODE_ENV === 'development' && (
-        <button 
-          onClick={logoutFromAllSessions}
-          style={{
-            position: 'fixed',
-            bottom: '10px',
-            right: '10px',
-            zIndex: 1000,
-            padding: '5px 10px',
-            fontSize: '10px',
-            backgroundColor: '#ff4444',
-            color: 'white',
-            border: 'none',
-            borderRadius: '5px',
-            opacity: 0.7
-          }}
-          title="Выйти из всех сессий (для отладки)"
-        >
-          🔄 Сброс сессий
-        </button>
-      )}
     </div>
   );
 };
