@@ -5,15 +5,12 @@ import { api, helpers } from './services/api';
 
 // Генерация уникального ID устройства с улучшенным хранением
 const generateDeviceId = () => {
-  // Пытаемся получить deviceId из localStorage
   let deviceId = localStorage.getItem('deviceId');
   
-  // Если нет в localStorage, проверяем sessionStorage
   if (!deviceId) {
     deviceId = sessionStorage.getItem('deviceId');
   }
   
-  // Если все еще нет, создаем новый
   if (!deviceId) {
     deviceId = 'device_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
     localStorage.setItem('deviceId', deviceId);
@@ -47,11 +44,9 @@ const saveSessionState = (state) => {
 // Загрузка состояния сессии
 const loadSessionState = () => {
   try {
-    // Сначала пробуем localStorage
     let sessionData = localStorage.getItem('metro_session_state');
     
     if (!sessionData) {
-      // Пробуем sessionStorage
       sessionData = sessionStorage.getItem('metro_session_state');
     }
     
@@ -112,6 +107,13 @@ export const App = () => {
   const [stationError, setStationError] = useState(false);
   const [restoreAttempted, setRestoreAttempted] = useState(false);
   const [isColdStart, setIsColdStart] = useState(true);
+  const [statistics, setStatistics] = useState({
+    totalUsers: 0,
+    totalConnected: 0,
+    totalWaiting: 0,
+    connectedStations: 0,
+    waitingStations: 0
+  });
   
   const CACHE_DURATION = 10000;
   const PING_INTERVAL = 15000;
@@ -125,6 +127,7 @@ export const App = () => {
   const metroMapRef = useRef(null);
   const isInitialMountRef = useRef(true);
   const sessionRestoreInProgressRef = useRef(false);
+  const beforeUnloadHandlerRef = useRef(null);
 
   // Основная инициализация приложения
   useEffect(() => {
@@ -285,6 +288,9 @@ export const App = () => {
           device_id: deviceId
         });
         
+        // Загружаем статистику
+        await loadStatistics();
+        
         // Восстанавливаем экран
         if (serverSession.is_connected && serverSession.station) {
           // Восстанавливаем комнату станции
@@ -378,6 +384,9 @@ export const App = () => {
         
         // Восстанавливаем состояние
         await restoreUserSession(latestSession);
+        
+        // Загружаем статистику
+        await loadStatistics();
         
         // Сохраняем состояние
         saveSessionState({
@@ -541,6 +550,50 @@ export const App = () => {
     }
   };
 
+  // Загрузка статистики
+  const loadStatistics = async () => {
+    try {
+      const users = await api.getUsers();
+      const activeUsers = users.filter(user => user.online === true);
+      
+      const totalUsers = activeUsers.length;
+      const totalConnected = activeUsers.filter(user => user.is_connected === true).length;
+      const totalWaiting = activeUsers.filter(user => user.is_waiting === true).length;
+      
+      // Получаем уникальные станции с активными пользователями
+      const connectedStations = new Set(
+        activeUsers
+          .filter(user => user.is_connected && user.station)
+          .map(user => user.station)
+      ).size;
+      
+      const waitingStations = new Set(
+        activeUsers
+          .filter(user => user.is_waiting)
+          .map(user => user.city || 'unknown')
+      ).size;
+      
+      setStatistics({
+        totalUsers,
+        totalConnected,
+        totalWaiting,
+        connectedStations,
+        waitingStations
+      });
+      
+      console.log('📊 Статистика загружена:', {
+        totalUsers,
+        totalConnected,
+        totalWaiting,
+        connectedStations,
+        waitingStations
+      });
+      
+    } catch (error) {
+      console.error('❌ Ошибка загрузки статистики:', error);
+    }
+  };
+
   // Запуск глобального обновления
   const startGlobalRefresh = () => {
     const interval = setInterval(async () => {
@@ -548,9 +601,13 @@ export const App = () => {
         if (currentScreen === 'waiting') {
           await loadStationsMap();
           await loadRequests();
+          await loadStatistics();
         } else if (currentScreen === 'joined' && currentGroup) {
           await loadGroupMembers(currentGroup.station);
           await loadRequests();
+          await loadStatistics();
+        } else if (currentScreen === 'setup') {
+          await loadStatistics();
         }
         await improvedPingActivity();
       } catch (error) {
@@ -567,6 +624,15 @@ export const App = () => {
     try {
       const data = await api.getStationsStats(selectedCity);
       setStationsData(data);
+      
+      // Обновляем общую статистику
+      if (data.totalStats) {
+        setStatistics(prev => ({
+          ...prev,
+          totalConnected: data.totalStats.total_connected || 0,
+          totalWaiting: data.totalStats.total_waiting || 0
+        }));
+      }
     } catch (error) {
       console.error('Ошибка загрузки карты станций:', error);
     }
@@ -620,6 +686,10 @@ export const App = () => {
       setAllUsers(activeUsers);
       setUsersCache(activeUsers);
       setCacheTimestamp(now);
+      
+      // Обновляем статистику
+      await loadStatistics();
+      
       return activeUsers;
     } catch (error) {
       console.error('Ошибка загрузки запросов:', error);
@@ -680,6 +750,127 @@ export const App = () => {
     return () => clearInterval(realtimePollingInterval);
   }, [currentScreen, currentGroup]);
 
+  // Автоматическое отключение пользователя при закрытии страницы
+  useEffect(() => {
+    // Удаляем старый обработчик если есть
+    if (beforeUnloadHandlerRef.current) {
+      window.removeEventListener('beforeunload', beforeUnloadHandlerRef.current);
+    }
+    
+    // Создаем новый обработчик
+    const handleBeforeUnload = async (event) => {
+      console.log('🔴 Пользователь покидает страницу');
+      
+      if (userIdRef.current) {
+        try {
+          // Устанавливаем пользователя как оффлайн
+          await api.updateUser(userIdRef.current, { 
+            online: false,
+            is_connected: false,
+            is_waiting: false,
+            last_seen: new Date().toISOString(),
+            session_id: sessionIdRef.current,
+            device_id: deviceId,
+            status: 'Пользователь покинул страницу'
+          });
+          
+          console.log('✅ Пользователь отключен от комнаты');
+          
+          // Очищаем кеши
+          clearSessionState();
+          
+        } catch (error) {
+          console.error('❌ Ошибка отключения пользователя:', error);
+          
+          // Пытаемся отправить запрос через Beacon API для надежности
+          if (navigator.sendBeacon) {
+            try {
+              const data = new Blob([JSON.stringify({
+                userId: userIdRef.current,
+                action: 'user_offline',
+                timestamp: new Date().toISOString(),
+                deviceId: deviceId
+              })], { type: 'application/json' });
+              
+              // Отправляем асинхронно через Beacon API
+              navigator.sendBeacon(`${api.baseUrl}/users/${userIdRef.current}/offline`, data);
+            } catch (beaconError) {
+              console.error('❌ Ошибка Beacon API:', beaconError);
+            }
+          }
+        }
+      }
+    };
+    
+    // Сохраняем ссылку на обработчик
+    beforeUnloadHandlerRef.current = handleBeforeUnload;
+    
+    // Добавляем обработчик
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    // Также обрабатываем событие pagehide для мобильных устройств
+    const handlePageHide = (event) => {
+      if (event.persisted) {
+        // Страница сохраняется в кеше
+        console.log('📱 Страница скрыта (закеширована)');
+      } else {
+        // Страница будет закрыта
+        handleBeforeUnload(event);
+      }
+    };
+    
+    window.addEventListener('pagehide', handlePageHide);
+    
+    // Обработчик visibilitychange для скрытия/показа вкладки
+    const handleVisibilityChange = async () => {
+      if (document.hidden) {
+        // Вкладка скрыта
+        console.log('👁️ Вкладка скрыта');
+        
+        if (userIdRef.current) {
+          // Обновляем статус на "неактивен"
+          try {
+            await api.updateUser(userIdRef.current, { 
+              online: false,
+              last_seen: new Date().toISOString(),
+              session_id: sessionIdRef.current,
+              device_id: deviceId,
+              status: 'Пользователь неактивен'
+            });
+          } catch (error) {
+            console.error('❌ Ошибка обновления статуса при скрытии:', error);
+          }
+        }
+      } else {
+        // Вкладка снова активна
+        console.log('👁️ Вкладка активна');
+        
+        if (userIdRef.current) {
+          // Восстанавливаем статус
+          try {
+            await api.updateUser(userIdRef.current, { 
+              online: true,
+              last_seen: new Date().toISOString(),
+              session_id: sessionIdRef.current,
+              device_id: deviceId,
+              status: 'Пользователь активен'
+            });
+          } catch (error) {
+            console.error('❌ Ошибка восстановления статуса:', error);
+          }
+        }
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      window.removeEventListener('beforeunload', beforeUnloadHandlerRef.current);
+      window.removeEventListener('pagehide', handlePageHide);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [userIdRef.current, deviceId]);
+
   // Обработка онлайн/офлайн статуса
   useEffect(() => {
     const handleOnline = async () => {
@@ -705,6 +896,10 @@ export const App = () => {
             await loadStationsMap();
             await loadRequests();
           }
+          
+          // Обновляем статистику
+          await loadStatistics();
+          
         } catch (error) {
           console.error('❌ Ошибка восстановления сессии:', error);
         }
@@ -1026,6 +1221,9 @@ export const App = () => {
       }
       
       if (createdUser) {
+        // Загружаем статистику
+        await loadStatistics();
+        
         // Сохраняем состояние сессии
         saveSessionState({
           userId: userIdRef.current,
@@ -1123,6 +1321,9 @@ export const App = () => {
       setCurrentGroup(groupData);
       setCurrentScreen('joined');
       
+      // Загружаем статистику
+      await loadStatistics();
+      
       // Сохраняем состояние сессии
       saveSessionState({
         userId: userIdRef.current,
@@ -1171,6 +1372,9 @@ export const App = () => {
           last_seen: new Date().toISOString()
         });
         console.log('✅ Пользователь вышел из группы');
+        
+        // Обновляем статистику
+        await loadStatistics();
         
         // Обновляем сохраненное состояние
         saveSessionState({
@@ -1307,44 +1511,6 @@ export const App = () => {
     }
   };
 
-  // Обработчик закрытия страницы
-  useEffect(() => {
-    const handleBeforeUnload = async () => {
-      if (userIdRef.current) {
-        // Сохраняем текущее состояние перед закрытием
-        saveSessionState({
-          userId: userIdRef.current,
-          nickname,
-          selectedCity,
-          selectedGender,
-          clothingColor,
-          wagonNumber,
-          currentSelectedStation,
-          currentScreen,
-          timestamp: Date.now()
-        });
-        
-        // Отмечаем пользователя как оффлайн
-        try {
-          await api.updateUser(userIdRef.current, { 
-            online: false,
-            last_seen: new Date().toISOString(),
-            session_id: sessionIdRef.current,
-            device_id: deviceId
-          });
-        } catch (error) {
-          // Игнорируем ошибки при закрытии страницы
-        }
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [currentScreen, currentGroup, deviceId, nickname, selectedCity, selectedGender, clothingColor, wagonNumber, currentSelectedStation]);
-
   // Навигация
   const showSetup = () => setCurrentScreen('setup');
   const showWaitingRoom = () => {
@@ -1411,8 +1577,8 @@ export const App = () => {
           <div className="station-name">{stationName}</div>
           {userCount > 0 ? (
             <div className="station-counts">
-              {waitingCount > 0 && <span className="station-count count-waiting">{waitingCount}⏳</span>}
               {connectedCount > 0 && <span className="station-count count-connected">{connectedCount}✅</span>}
+              {waitingCount > 0 && <span className="station-count count-waiting">{waitingCount}⏳</span>}
             </div>
           ) : (
             <div style={{fontSize: '10px', color: '#666'}}>Пусто</div>
@@ -1491,6 +1657,70 @@ export const App = () => {
     return null;
   };
 
+  // Рендер статистики
+  const renderStatistics = () => {
+    return (
+      <div className="statistics-container">
+        <h4>📊 Общая статистика</h4>
+        <div className="statistics-grid">
+          <div className="statistic-item">
+            <div className="statistic-value">{statistics.totalUsers}</div>
+            <div className="statistic-label">Всего онлайн</div>
+          </div>
+          <div className="statistic-item">
+            <div className="statistic-value">{statistics.totalConnected}</div>
+            <div className="statistic-label">Выбрали станцию</div>
+          </div>
+          <div className="statistic-item">
+            <div className="statistic-value">{statistics.totalWaiting}</div>
+            <div className="statistic-label">В ожидании</div>
+          </div>
+          <div className="statistic-item">
+            <div className="statistic-value">{statistics.connectedStations}</div>
+            <div className="statistic-label">Активных станций</div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Рендер статистики комнаты
+  const renderRoomStatistics = () => {
+    const stationData = stationsData.stationStats?.find(station => 
+      station.station === currentSelectedStation
+    );
+    
+    if (!stationData) return null;
+    
+    return (
+      <div className="room-statistics">
+        <div className="room-stats-grid">
+          <div className="room-stat-item">
+            <div className="room-stat-icon">👥</div>
+            <div className="room-stat-info">
+              <div className="room-stat-value">{stationData.totalUsers || 0}</div>
+              <div className="room-stat-label">Всего на станции</div>
+            </div>
+          </div>
+          <div className="room-stat-item">
+            <div className="room-stat-icon">✅</div>
+            <div className="room-stat-info">
+              <div className="room-stat-value">{stationData.connected || 0}</div>
+              <div className="room-stat-label">Подключились</div>
+            </div>
+          </div>
+          <div className="room-stat-item">
+            <div className="room-stat-icon">⏳</div>
+            <div className="room-stat-info">
+              <div className="room-stat-value">{stationData.waiting || 0}</div>
+              <div className="room-stat-label">В ожидании</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="app-container">
       {renderSessionInfo()}
@@ -1539,6 +1769,9 @@ export const App = () => {
                 <button className="nav-btn" onClick={showWaitingRoom}>2. Выбор станции</button>
                 <button className="nav-btn" onClick={showJoinedRoom}>3. Комната станции</button>
               </div>
+              
+              {renderStatistics()}
+              
               <p>Укажите ваш город и пол</p>
               
               <div className="form-group">
@@ -1651,6 +1884,8 @@ export const App = () => {
                 <button className="nav-btn" onClick={showJoinedRoom}>3. Комната станции</button>
               </div>
               
+              {renderStatistics()}
+              
               <p style={{fontSize: '12px'}}> 🔴 Выберите станцию на карте для присоединения </p>
               <p style={{fontSize: '12px'}}> 🔴 Цвет верхней одежды или стиль </p>
               <p style={{fontSize: '12px'}}> 🔴 Номер вагона (если в пути)</p>
@@ -1680,6 +1915,8 @@ export const App = () => {
                 >
                   {renderStationsMap()}
                 </div>
+                
+                {currentSelectedStation && renderRoomStatistics()}
                 
                 {stationError && (
                   <div style={{
@@ -1797,6 +2034,19 @@ export const App = () => {
                 <button className="nav-btn active">3. Комната станции</button>
               </div>
               
+              {renderStatistics()}
+              {renderRoomStatistics()}
+              
+              <div className="room-status-info">
+                <div className="room-status-item">
+                  <div className="room-status-icon">👥</div>
+                  <div className="room-status-details">
+                    <div className="room-status-title">Участников в комнате:</div>
+                    <div className="room-status-value">{groupMembers.length} человек</div>
+                  </div>
+                </div>
+              </div>
+              
               <p>Расскажите о своем состоянии другим участникам</p>
               
               <div className="status-indicators" id="current-user-status">
@@ -1861,7 +2111,7 @@ export const App = () => {
               </div>
 
               <div className="users-list-section">
-                <h3>👥 Участники на вашей станции</h3>
+                <h3>👥 Участники на вашей станции ({groupMembers.length})</h3>
                 <div id="group-members">
                   {renderGroupMembers()}
                 </div>
