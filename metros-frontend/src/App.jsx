@@ -222,7 +222,7 @@ const setUserOffline = async (userId, sessionId, deviceId) => {
   }
 };
 
-// Функция для установки пользователя в онлайн (используется при восстановлении)
+// Функция для установки пользователя в онлайн
 const setUserOnline = async (userId, sessionId, deviceId) => {
   if (!userId) return;
   
@@ -313,31 +313,13 @@ const calculateStationsStats = (users, city) => {
   }
 };
 
-// Улучшенная функция показа уведомлений с обработкой ошибок
+// Улучшенная функция показа уведомлений
 const showNotification = async (text, type = 'info') => {
   try {
-    // Проверяем, доступен ли метод VKWebAppShowSnackbar
-    const isAvailable = await bridge.isSupports('VKWebAppShowSnackbar');
-    
-    if (!isAvailable) {
-      console.log('📱 VKWebAppShowSnackbar не доступен, показываем консольное уведомление');
-      console.log(`${type === 'error' ? '❌' : '✅'} ${text}`);
-      return;
-    }
-    
-    // Ограничиваем длину текста для VK (максимум 100 символов)
     const truncatedText = text.length > 100 ? text.substring(0, 97) + '...' : text;
-    
-    const result = await bridge.send('VKWebAppShowSnackbar', {
-      text: truncatedText
-    });
-    
-    if (result && result.result) {
-      console.log('📱 Уведомление показано:', truncatedText);
-    }
+    console.log(`${type === 'error' ? '❌' : '✅'} ${truncatedText}`);
   } catch (error) {
     console.error('❌ Ошибка показа уведомления:', error);
-    // Не выбрасываем ошибку дальше, чтобы не ломать основной поток
   }
 };
 
@@ -376,8 +358,8 @@ export const App = () => {
   const [isColdStart, setIsColdStart] = useState(true);
   const [notificationText, setNotificationText] = useState('');
   
-  const CACHE_DURATION = 30000; // Увеличиваем до 30 секунд
-  const PING_INTERVAL = 45000; // Увеличиваем интервал пинга до 45 секунд
+  const CACHE_DURATION = 30000;
+  const PING_INTERVAL = 60000; // Увеличиваем интервал пинга до 60 секунд
 
   const userIdRef = useRef(null);
   const globalRefreshIntervalRef = useRef(null);
@@ -391,9 +373,11 @@ export const App = () => {
   const appVisibilityHandlerRef = useRef(null);
   const appCloseHandlerRef = useRef(null);
   const backgroundPingIntervalRef = useRef(null);
-  const isAppClosingRef = useRef(false); // Флаг реального закрытия приложения
-  const lastApiCallRef = useRef(0); // Время последнего API вызова
-  const apiCallCooldownRef = useRef(1000); // Задержка между API вызовами
+  const isAppClosingRef = useRef(false);
+  const lastApiCallRef = useRef(0);
+  const apiCallCooldownRef = useRef(2000); // Увеличиваем задержку до 2 секунд
+  const isInBackgroundRef = useRef(false); // Новый флаг для отслеживания фонового режима
+  const pingTimeoutRef = useRef(null); // Таймаут для пинга
 
   // Основная инициализация приложения
   useEffect(() => {
@@ -427,26 +411,17 @@ export const App = () => {
         console.error('❌ Ошибка инициализации VK Bridge:', error);
       });
 
-    // Обработчик видимости страницы - ИЗМЕНЕНО: не отключаем пользователя
-    appVisibilityHandlerRef.current = (event) => {
-      console.log('👀 Событие видимости страницы:', event.type);
-      
-      if (document.hidden || event.type === 'blur' || event.type === 'visibilitychange') {
-        console.log('📱 Приложение свернуто/скрыто - СОХРАНЯЕМ СТАТУС ОНЛАЙН');
+    // Упрощенный обработчик видимости страницы
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        console.log('📱 Приложение ушло в фон');
+        isInBackgroundRef.current = true;
         setAppState('background');
-        
-        // НЕ устанавливаем пользователя в оффлайн при сворачивании
-        // Вместо этого запускаем фоновый пинг
-        startBackgroundPing();
-        
       } else {
         console.log('📱 Приложение активно');
+        isInBackgroundRef.current = false;
         setAppState('active');
-        
-        // Останавливаем фоновый пинг
-        stopBackgroundPing();
-        
-        // Обновляем активность
+        // При возвращении на передний план - отправляем пинг
         if (userIdRef.current) {
           improvedPingActivity();
         }
@@ -454,36 +429,41 @@ export const App = () => {
     };
 
     // Обработчик реального закрытия приложения
-    appCloseHandlerRef.current = async (event) => {
+    const handleBeforeUnload = async (event) => {
       console.log('⚠️ Приложение закрывается - устанавливаем оффлайн');
       isAppClosingRef.current = true;
       
-      // Устанавливаем пользователя в оффлайн
-      if (userIdRef.current) {
-        const currentDeviceId = await generateDeviceId();
-        await setUserOffline(userIdRef.current, sessionIdRef.current, currentDeviceId);
+      // Очищаем все таймеры и интервалы
+      if (pingTimeoutRef.current) {
+        clearTimeout(pingTimeoutRef.current);
+      }
+      if (backgroundPingIntervalRef.current) {
+        clearInterval(backgroundPingIntervalRef.current);
       }
       
-      // Останавливаем все интервалы
-      stopBackgroundPing();
+      // Устанавливаем пользователя в оффлайн
+      if (userIdRef.current) {
+        try {
+          const currentDeviceId = await generateDeviceId();
+          await setUserOffline(userIdRef.current, sessionIdRef.current, currentDeviceId);
+        } catch (error) {
+          console.error('❌ Ошибка при установке оффлайн:', error);
+        }
+      }
     };
 
     // Подписка на события видимости страницы
-    document.addEventListener('visibilitychange', appVisibilityHandlerRef.current);
-    window.addEventListener('blur', appVisibilityHandlerRef.current);
-    window.addEventListener('focus', appVisibilityHandlerRef.current);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     
     // Подписка на события реального закрытия
-    window.addEventListener('beforeunload', appCloseHandlerRef.current);
-    window.addEventListener('pagehide', appCloseHandlerRef.current);
-    window.addEventListener('unload', appCloseHandlerRef.current);
+    window.addEventListener('beforeunload', handleBeforeUnload);
 
     // Подписка на события VK Bridge
-    bridge.subscribe((event) => {
+    const bridgeUnsubscribe = bridge.subscribe((event) => {
       if (!event.detail) return;
       
       const { type, data } = event.detail;
-      console.log('📡 VK Bridge событие:', type, data);
+      console.log('📡 VK Bridge событие:', type);
       
       switch (type) {
         case 'VKWebAppUpdateConfig':
@@ -492,17 +472,14 @@ export const App = () => {
           document.body.attributes.setNamedItem(schemeAttribute);
           break;
         case 'VKWebAppViewHide':
-          console.log('📱 VKWebAppViewHide - приложение скрыто - СОХРАНЯЕМ ОНЛАЙН');
+          console.log('📱 VKWebAppViewHide - приложение скрыто');
+          isInBackgroundRef.current = true;
           setAppState('background');
-          // НЕ устанавливаем пользователя в оффлайн
-          // Вместо этого запускаем фоновый пинг
-          startBackgroundPing();
           break;
         case 'VKWebAppViewRestore':
           console.log('📱 VKWebAppViewRestore - приложение восстановлено');
+          isInBackgroundRef.current = false;
           setAppState('active');
-          // Останавливаем фоновый пинг
-          stopBackgroundPing();
           // При восстановлении обновляем статус
           if (userIdRef.current) {
             improvedPingActivity();
@@ -557,7 +534,6 @@ export const App = () => {
         }
       } catch (error) {
         console.error('❌ Критическая ошибка восстановления сессии:', error);
-        // При ошибке показываем setup
         setCurrentScreen('setup');
         showNotification('Ошибка восстановления сессии', 'error');
       } finally {
@@ -569,80 +545,75 @@ export const App = () => {
     
     restoreSession();
     
-    // Запуск глобального обновления
+    // Запуск глобального обновления с увеличенным интервалом
     const cleanupGlobalRefresh = startGlobalRefresh();
+
+    // Запуск периодического пинга
+    const startPeriodicPing = () => {
+      return setInterval(async () => {
+        if (userIdRef.current && !isInBackgroundRef.current) {
+          await improvedPingActivity();
+        }
+      }, PING_INTERVAL);
+    };
+
+    const pingInterval = startPeriodicPing();
 
     // Очистка при размонтировании
     return () => {
-      cleanupGlobalRefresh();
+      console.log('🧹 Очистка компонента');
       
+      // Удаляем обработчики событий
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      
+      // Отписываемся от событий VK Bridge
+      if (bridgeUnsubscribe) {
+        bridgeUnsubscribe();
+      }
+      
+      // Очищаем все таймеры и интервалы
+      if (pingTimeoutRef.current) {
+        clearTimeout(pingTimeoutRef.current);
+      }
+      if (pingInterval) {
+        clearInterval(pingInterval);
+      }
+      if (backgroundPingIntervalRef.current) {
+        clearInterval(backgroundPingIntervalRef.current);
+      }
       if (globalRefreshIntervalRef.current) {
         clearInterval(globalRefreshIntervalRef.current);
       }
       
-      // Удаляем обработчики событий видимости
-      if (appVisibilityHandlerRef.current) {
-        document.removeEventListener('visibilitychange', appVisibilityHandlerRef.current);
-        window.removeEventListener('blur', appVisibilityHandlerRef.current);
-        window.removeEventListener('focus', appVisibilityHandlerRef.current);
-      }
-      
-      // Удаляем обработчики закрытия
-      if (appCloseHandlerRef.current) {
-        window.removeEventListener('beforeunload', appCloseHandlerRef.current);
-        window.removeEventListener('pagehide', appCloseHandlerRef.current);
-        window.removeEventListener('unload', appCloseHandlerRef.current);
-      }
-      
-      // Останавливаем фоновый пинг
-      stopBackgroundPing();
-      
       // Устанавливаем пользователя в оффлайн только если это реальное закрытие
       if (isAppClosingRef.current && userIdRef.current) {
-        setUserOffline(userIdRef.current, sessionIdRef.current, deviceId);
+        const currentDeviceId = deviceId || 'device_' + Math.random().toString(36).substr(2, 9);
+        setUserOffline(userIdRef.current, sessionIdRef.current, currentDeviceId);
       }
+      
+      cleanupGlobalRefresh();
     };
   }, []);
 
-  // Запуск фонового пинга (когда приложение свернуто)
-  const startBackgroundPing = () => {
-    console.log('🔄 Запускаем фоновый пинг');
-    
-    // Очищаем предыдущий интервал если есть
-    if (backgroundPingIntervalRef.current) {
-      clearInterval(backgroundPingIntervalRef.current);
-    }
-    
-    // Запускаем новый интервал для фонового пинга (каждые 60 секунд)
-    backgroundPingIntervalRef.current = setInterval(async () => {
-      if (userIdRef.current) {
-        try {
-          const currentDeviceId = await generateDeviceId();
-          await api.pingActivity(userIdRef.current, {
-            online: true,
-            is_connected: currentScreen === 'joined',
-            session_id: sessionIdRef.current,
-            device_id: currentDeviceId,
-            last_seen: new Date().toISOString(),
-            ...(currentScreen === 'joined' && currentGroup && { 
-              station: currentGroup.station 
-            })
-          });
-          console.log('📡 Фоновый пинг отправлен');
-        } catch (error) {
-          console.error('❌ Ошибка фонового пинга:', error);
+  // Запуск глобального обновления
+  const startGlobalRefresh = () => {
+    const interval = setInterval(async () => {
+      try {
+        if (currentScreen === 'waiting') {
+          await loadStationsMap();
+          await loadRequests();
+        } else if (currentScreen === 'joined' && currentGroup) {
+          await loadGroupMembers(currentGroup.station);
+          await loadRequests();
         }
+      } catch (error) {
+        console.error('❌ Ошибка глобального обновления:', error);
       }
-    }, 60000); // 60 секунд
-  };
-
-  // Остановка фонового пинга
-  const stopBackgroundPing = () => {
-    if (backgroundPingIntervalRef.current) {
-      console.log('🛑 Останавливаем фоновый пинг');
-      clearInterval(backgroundPingIntervalRef.current);
-      backgroundPingIntervalRef.current = null;
-    }
+    }, 60000); // Увеличиваем интервал до 60 секунд
+    
+    globalRefreshIntervalRef.current = interval;
+    return () => clearInterval(interval);
   };
 
   // Улучшенная функция для API вызовов с задержкой
@@ -691,7 +662,7 @@ export const App = () => {
         );
         
         if (serverSession) {
-          // Сессия существует на сервере (независимо от статуса online)
+          // Сессия существует на сервере
           console.log('✅ Сессия найдена на сервере, продолжаем восстановление');
           
           // Обновляем сессию и устанавливаем онлайн
@@ -742,7 +713,6 @@ export const App = () => {
         }
       } catch (apiError) {
         console.error('❌ Ошибка API при восстановлении сессии:', apiError);
-        // Показываем setup экран при ошибке API
         setCurrentScreen('setup');
         showNotification('Ошибка подключения к серверу', 'error');
       }
@@ -761,7 +731,6 @@ export const App = () => {
       
       try {
         const users = await safeApiCall(api.getUsers);
-        const now = Date.now();
         
         // 1. Ищем самую свежую сессию для этого устройства
         const deviceSessions = users.filter(user => 
@@ -786,17 +755,13 @@ export const App = () => {
         const latestSession = deviceSessions[0];
         console.log('🎯 Самая свежая сессия:', latestSession.id, latestSession.name);
         
-        // ВСЕГДА восстанавливаем сессию, даже если она "неактивна"
-        // (пользователь мог просто свернуть приложение)
-        console.log('✅ Восстанавливаем сессию (даже если была неактивна):', latestSession.id);
+        // Восстанавливаем сессию
+        console.log('✅ Восстанавливаем сессию:', latestSession.id);
         userIdRef.current = latestSession.id;
         
         // Генерируем новую сессию
         const newSessionId = generateSessionId(currentDeviceId);
         sessionIdRef.current = newSessionId;
-        
-        // Деактивируем все другие сессии с этого устройства
-        await deactivateOtherDeviceSessions(currentDeviceId, latestSession.id);
         
         // Восстанавливаем состояние и устанавливаем онлайн
         await restoreUserSession(latestSession);
@@ -828,66 +793,6 @@ export const App = () => {
     } catch (error) {
       console.error('❌ Ошибка проверки сессии:', error);
       setCurrentScreen('setup');
-    }
-  };
-
-  // Деактивация других сессий с этого устройства
-  const deactivateOtherDeviceSessions = async (deviceId, currentSessionId) => {
-    try {
-      const users = await safeApiCall(api.getUsers);
-      const otherSessions = users.filter(user => 
-        user.device_id === deviceId && 
-        user.id !== currentSessionId &&
-        user.online === true
-      );
-      
-      console.log(`🧹 Деактивируем ${otherSessions.length} других сессий с устройства ${deviceId}`);
-      
-      for (const session of otherSessions) {
-        try {
-          await safeApiCall(api.updateUser, session.id, {
-            online: false,
-            is_connected: false,
-            is_waiting: false,
-            status: 'Сессия деактивирована',
-            last_seen: new Date().toISOString()
-          });
-          console.log(`✅ Деактивирована сессия: ${session.id}`);
-        } catch (error) {
-          console.error(`❌ Ошибка деактивации сессии ${session.id}:`, error);
-        }
-      }
-    } catch (error) {
-      console.error('❌ Ошибка деактивации других сессий:', error);
-    }
-  };
-
-  // Деактивация всех сессий с устройства
-  const deactivateAllDeviceSessions = async (deviceId) => {
-    try {
-      const users = await safeApiCall(api.getUsers);
-      const deviceSessions = users.filter(user => 
-        user.device_id === deviceId &&
-        user.online === true
-      );
-      
-      console.log(`🧹 Деактивируем все (${deviceSessions.length}) сессии с устройства ${deviceId}`);
-      
-      for (const session of deviceSessions) {
-        try {
-          await safeApiCall(api.updateUser, session.id, {
-            online: false,
-            is_connected: false,
-            is_waiting: false,
-            status: 'Сессия деактивирована',
-            last_seen: new Date().toISOString()
-          });
-        } catch (error) {
-          console.error(`❌ Ошибка деактивации сессии ${session.id}:`, error);
-        }
-      }
-    } catch (error) {
-      console.error('❌ Ошибка деактивации всех сессий:', error);
     }
   };
 
@@ -953,29 +858,7 @@ export const App = () => {
     }
   };
 
-  // Запуск глобального обновления
-  const startGlobalRefresh = () => {
-    const interval = setInterval(async () => {
-      try {
-        if (currentScreen === 'waiting') {
-          await loadStationsMap();
-          await loadRequests();
-        } else if (currentScreen === 'joined' && currentGroup) {
-          await loadGroupMembers(currentGroup.station);
-          await loadRequests();
-        }
-        // Обновляем пинг активности
-        await improvedPingActivity();
-      } catch (error) {
-        console.error('❌ Ошибка глобального обновления:', error);
-      }
-    }, 30000); // Увеличиваем интервал до 30 секунд
-    
-    globalRefreshIntervalRef.current = interval;
-    return () => clearInterval(interval);
-  };
-
-  // Загрузка статистики станций - ИСПРАВЛЕННАЯ ВЕРСИЯ
+  // Загрузка статистики станций
   const loadStationsMap = async () => {
     try {
       console.log('🗺️ Загрузка статистики станций для города:', selectedCity);
@@ -1005,7 +888,6 @@ export const App = () => {
       return stats;
     } catch (error) {
       console.error('❌ Ошибка загрузки карты станций:', error);
-      // Устанавливаем пустые данные при ошибке
       const emptyStats = {
         stationStats: [],
         totalStats: { total_connected: 0, total_waiting: 0, total_users: 0 }
@@ -1058,7 +940,6 @@ export const App = () => {
     
     try {
       const users = await safeApiCall(api.getUsers);
-      // Фильтруем только активных пользователей
       const activeUsers = users.filter(user => user.online === true);
       setAllUsers(activeUsers);
       setUsersCache(activeUsers);
@@ -1069,59 +950,6 @@ export const App = () => {
       return usersCache || [];
     }
   };
-
-  // Реальное обновление данных в комнате станции
-  useEffect(() => {
-    const realtimePollingInterval = setInterval(async () => {
-      if (currentScreen === 'joined' && currentGroup) {
-        try {
-          // Загружаем актуальных участников
-          const users = await safeApiCall(api.getUsers);
-          const freshGroupMembers = users.filter(user => 
-            user.station === currentGroup.station && 
-            user.is_connected === true &&
-            user.online === true
-          );
-          
-          // Обновляем только если есть изменения
-          setGroupMembers(prevMembers => {
-            const prevIds = prevMembers.map(u => u.id).sort();
-            const newIds = freshGroupMembers.map(u => u.id).sort();
-            
-            if (JSON.stringify(prevIds) !== JSON.stringify(newIds)) {
-              console.log('🔄 Обновлен состав участников группы');
-              return freshGroupMembers;
-            }
-            
-            // Проверяем изменения статусов
-            const hasStatusChanges = prevMembers.some(prevUser => {
-              const newUser = freshGroupMembers.find(u => u.id === prevUser.id);
-              return newUser && (
-                newUser.status !== prevUser.status ||
-                newUser.position !== prevUser.position ||
-                newUser.mood !== prevUser.mood
-              );
-            });
-            
-            if (hasStatusChanges) {
-              console.log('🔄 Обновлены статусы участников группы');
-              return freshGroupMembers;
-            }
-            
-            return prevMembers;
-          });
-          
-          // Обновляем статистику станций
-          await loadStationsMap();
-          
-        } catch (error) {
-          console.error('Ошибка обновления данных:', error);
-        }
-      }
-    }, 10000); // Увеличиваем интервал до 10 секунд
-    
-    return () => clearInterval(realtimePollingInterval);
-  }, [currentScreen, currentGroup]);
 
   // Обработка онлайн/офлайн статуса
   useEffect(() => {
@@ -1153,10 +981,6 @@ export const App = () => {
     const handleOffline = () => {
       console.log('🌐 Потеряно интернет-соединение');
       setIsOnline(false);
-      
-      // При потере соединения НЕ помечаем пользователя как оффлайн
-      // Просто фиксируем факт потери соединения
-      console.log('📡 Потеряно соединение с интернетом, но статус онлайн сохраняется');
       setNotificationText('⚠️ Потеряно соединение с интернетом');
     };
     
@@ -1212,7 +1036,7 @@ export const App = () => {
     // Добавляем задержку для предотвращения частых сохранений
     const timeoutId = setTimeout(() => {
       saveSettings();
-    }, 1000);
+    }, 2000);
     
     return () => clearTimeout(timeoutId);
   }, [
@@ -1226,7 +1050,7 @@ export const App = () => {
     if (userIdRef.current && (selectedPosition || selectedMood)) {
       const timeoutId = setTimeout(() => {
         updateUserState();
-      }, 2000); // Увеличиваем задержку до 2 секунд
+      }, 3000); // Увеличиваем задержку до 3 секунд
       
       return () => clearTimeout(timeoutId);
     }
@@ -1237,26 +1061,11 @@ export const App = () => {
     const trimmedNickname = nickname.trim();
     if (!trimmedNickname) {
       setNicknameError(true);
-      
-      if (nicknameInputRef.current) {
-        nicknameInputRef.current.style.border = '2px solid #ff4444';
-        nicknameInputRef.current.style.backgroundColor = '#fff5f5';
-        nicknameInputRef.current.style.boxShadow = '0 0 0 1px #ff4444';
-        nicknameInputRef.current.focus();
-      }
-      
       showNotification('Пожалуйста, введите ваш никнейм', 'error');
-      
       return false;
     }
     
     setNicknameError(false);
-    if (nicknameInputRef.current) {
-      nicknameInputRef.current.style.border = '';
-      nicknameInputRef.current.style.backgroundColor = '';
-      nicknameInputRef.current.style.boxShadow = '';
-    }
-    
     return true;
   };
 
@@ -1265,26 +1074,11 @@ export const App = () => {
     const trimmedColor = clothingColor.trim();
     if (!trimmedColor) {
       setClothingColorError(true);
-      
-      if (clothingColorInputRef.current) {
-        clothingColorInputRef.current.style.border = '2px solid #ff4444';
-        clothingColorInputRef.current.style.backgroundColor = '#fff5f5';
-        clothingColorInputRef.current.style.boxShadow = '0 0 0 1px #ff4444';
-        clothingColorInputRef.current.focus();
-      }
-      
       showNotification('Пожалуйста, укажите цвет верхней одежды или стиль', 'error');
-      
       return false;
     }
     
     setClothingColorError(false);
-    if (clothingColorInputRef.current) {
-      clothingColorInputRef.current.style.border = '';
-      clothingColorInputRef.current.style.backgroundColor = '';
-      clothingColorInputRef.current.style.boxShadow = '';
-    }
-    
     return true;
   };
 
@@ -1292,23 +1086,11 @@ export const App = () => {
   const validateStation = () => {
     if (!currentSelectedStation) {
       setStationError(true);
-      
-      if (metroMapRef.current) {
-        metroMapRef.current.style.border = '2px solid #ff4444';
-        metroMapRef.current.style.boxShadow = '0 0 10px rgba(255, 68, 68, 0.3)';
-      }
-      
       showNotification('Пожалуйста, выберите станцию на карте', 'error');
-      
       return false;
     }
     
     setStationError(false);
-    if (metroMapRef.current) {
-      metroMapRef.current.style.border = '';
-      metroMapRef.current.style.boxShadow = '';
-    }
-    
     return true;
   };
 
@@ -1317,11 +1099,6 @@ export const App = () => {
     setNickname(e.target.value);
     if (nicknameError) {
       setNicknameError(false);
-      if (nicknameInputRef.current) {
-        nicknameInputRef.current.style.border = '';
-        nicknameInputRef.current.style.backgroundColor = '';
-        nicknameInputRef.current.style.boxShadow = '';
-      }
     }
   };
 
@@ -1330,11 +1107,6 @@ export const App = () => {
     setClothingColor(e.target.value);
     if (clothingColorError) {
       setClothingColorError(false);
-      if (clothingColorInputRef.current) {
-        clothingColorInputRef.current.style.border = '';
-        clothingColorInputRef.current.style.backgroundColor = '';
-        clothingColorInputRef.current.style.boxShadow = '';
-      }
     }
   };
 
@@ -1343,10 +1115,6 @@ export const App = () => {
     setCurrentSelectedStation(stationName);
     if (stationError) {
       setStationError(false);
-      if (metroMapRef.current) {
-        metroMapRef.current.style.border = '';
-        metroMapRef.current.style.boxShadow = '';
-      }
     }
   };
 
@@ -1366,101 +1134,39 @@ export const App = () => {
       const trimmedNickname = nickname.trim();
       const currentDeviceId = await generateDeviceId();
       
-      // Проверяем, нет ли активной сессии с этого устройства
-      const existingDeviceSession = users.find(user => 
-        user.device_id === currentDeviceId && 
-        user.online === true
-      );
-      
-      // Также проверяем, нет ли активной сессии с таким же никнеймом
-      const existingNicknameSession = users.find(user => 
-        user.name === trimmedNickname && 
-        user.online === true &&
-        user.id !== userIdRef.current
-      );
-      
       let createdUser;
+      const newSessionId = generateSessionId(currentDeviceId);
       
-      if (existingDeviceSession) {
-        // Используем существующую сессию с этого устройства
-        console.log('🔄 Используем существующую сессию с устройства:', existingDeviceSession.id);
-        
-        // Если есть другая сессия с таким же никнеймом, деактивируем её
-        if (existingNicknameSession && existingNicknameSession.id !== existingDeviceSession.id) {
-          console.log('⚠️ Найдена дублирующая сессия с таким же никнеймом, деактивируем');
-          await safeApiCall(api.updateUser, existingNicknameSession.id, {
-            online: false,
-            is_connected: false,
-            is_waiting: false,
-            status: 'Сессия заменена'
-          });
-        }
-        
-        // Обновляем существующую сессию
-        const newSessionId = generateSessionId(currentDeviceId);
-        createdUser = await safeApiCall(api.updateUser, existingDeviceSession.id, {
-          name: trimmedNickname,
-          city: selectedCity,
-          gender: selectedGender,
-          session_id: newSessionId,
-          device_id: currentDeviceId,
-          vk_user_id: vkUserIdRef.current,
-          online: true,
-          is_waiting: true,
-          is_connected: false,
-          last_seen: new Date().toISOString()
-        });
-        
-        userIdRef.current = existingDeviceSession.id;
-        sessionIdRef.current = newSessionId;
-        
-      } else {
-        // Создаем нового пользователя
-        console.log('🆕 Создаем новую сессию');
-        
-        // Деактивируем все сессии с этого устройства перед созданием новой
-        await deactivateAllDeviceSessions(currentDeviceId);
-        
-        // Если есть активная сессия с таким же никнеймом, деактивируем её
-        if (existingNicknameSession) {
-          console.log('⚠️ Найдена дублирующая сессия с таким же никнеймом, деактивируем');
-          await safeApiCall(api.updateUser, existingNicknameSession.id, {
-            online: false,
-            is_connected: false,
-            is_waiting: false,
-            status: 'Сессия заменена'
-          });
-        }
-        
-        const newSessionId = generateSessionId(currentDeviceId);
-        const userData = {
-          name: trimmedNickname,
-          station: '',
-          wagon: '',
-          color: '',
-          colorCode: helpers.getRandomColor(),
-          status: 'В режиме ожидания',
-          timer: "00:00",
-          online: true,
-          city: selectedCity,
-          gender: selectedGender,
-          position: '',
-          mood: '',
-          is_waiting: true,
-          is_connected: false,
-          session_id: newSessionId,
-          device_id: currentDeviceId,
-          vk_user_id: vkUserIdRef.current,
-          last_seen: new Date().toISOString()
-        };
+      // Создаем нового пользователя
+      console.log('🆕 Создаем новую сессию');
+      
+      const userData = {
+        name: trimmedNickname,
+        station: '',
+        wagon: '',
+        color: '',
+        colorCode: helpers.getRandomColor(),
+        status: 'В режиме ожидания',
+        timer: "00:00",
+        online: true,
+        city: selectedCity,
+        gender: selectedGender,
+        position: '',
+        mood: '',
+        is_waiting: true,
+        is_connected: false,
+        session_id: newSessionId,
+        device_id: currentDeviceId,
+        vk_user_id: vkUserIdRef.current,
+        last_seen: new Date().toISOString()
+      };
 
-        createdUser = await safeApiCall(api.createUser, userData);
-        
-        if (createdUser) {
-          userIdRef.current = createdUser.id;
-          sessionIdRef.current = newSessionId;
-          console.log('✅ Создана новая сессия:', createdUser.id);
-        }
+      createdUser = await safeApiCall(api.createUser, userData);
+      
+      if (createdUser) {
+        userIdRef.current = createdUser.id;
+        sessionIdRef.current = newSessionId;
+        console.log('✅ Создана новая сессия:', createdUser.id);
       }
       
       if (createdUser) {
@@ -1709,7 +1415,7 @@ export const App = () => {
     if (!userIdRef.current) return false;
     
     const now = Date.now();
-    if (now - lastPingTime < PING_INTERVAL) return false;
+    if (now - lastPingTime < 30000) return false; // Не пингуем чаще чем раз в 30 секунд
     
     try {
       const currentDeviceId = await generateDeviceId();
@@ -1760,7 +1466,7 @@ export const App = () => {
     setCurrentScreen('joined');
   };
 
-  // Рендер карты станций - ИСПРАВЛЕННЫЙ РЕНДЕР
+  // Рендер карты станций
   const renderStationsMap = () => {
     const { stationStats } = stationsData;
     
@@ -1780,11 +1486,6 @@ export const App = () => {
     const stationsMap = {};
     stationStats.forEach(station => {
       stationsMap[station.station] = station;
-    });
-    
-    console.log('🗺️ Рендерим станции:', {
-      totalStations: cityStations.length,
-      stationsWithData: Object.keys(stationsMap).length
     });
     
     return cityStations.map(stationName => {
@@ -1891,7 +1592,6 @@ export const App = () => {
           📱 Device: {deviceId?.substring(0, 10)}... | 
           👤 User ID: {userIdRef.current?.substring(0, 10)}... | 
           🖥️ Screen: {currentScreen} |
-          🕒 Cold Start: {isColdStart ? 'Да' : 'Нет'} |
           📊 Stats: {stationsData.totalStats?.total_connected || 0}✅ {stationsData.totalStats?.total_waiting || 0}⏳ |
           📱 State: {appState}
         </div>
@@ -1996,11 +1696,6 @@ export const App = () => {
                   value={nickname}
                   onChange={handleNicknameChange}
                   className={nicknameError ? 'error-input' : ''}
-                  style={{
-                    border: nicknameError ? '2px solid #ff4444' : '',
-                    backgroundColor: nicknameError ? '#fff5f5' : '',
-                    boxShadow: nicknameError ? '0 0 0 1px #ff4444' : ''
-                  }}
                   required 
                 />
                 <small className="field-hint" style={{ color: nicknameError ? '#ff4444' : '' }}>
@@ -2051,10 +1746,6 @@ export const App = () => {
                 className="btn" 
                 onClick={handleEnterWaitingRoom}
                 disabled={isLoading || isSessionRestoring}
-                style={{
-                  backgroundColor: nicknameError ? '#ff4444' : '',
-                  borderColor: nicknameError ? '#ff4444' : ''
-                }}
               >
                 {isLoading ? 'Создание профиля...' : 'Войти в комнату ожидания'}
               </button>
@@ -2111,10 +1802,6 @@ export const App = () => {
                   ref={metroMapRef}
                   className="metro-map" 
                   id="metro-map"
-                  style={{
-                    border: stationError ? '2px solid #ff4444' : '',
-                    boxShadow: stationError ? '0 0 10px rgba(255, 68, 68, 0.3)' : ''
-                  }}
                 >
                   {renderStationsMap()}
                 </div>
@@ -2173,11 +1860,6 @@ export const App = () => {
                     placeholder="Например: черный верх, синий низ, очки, шапка" 
                     value={clothingColor}
                     onChange={handleClothingColorChange}
-                    style={{
-                      border: clothingColorError ? '2px solid #ff4444' : '',
-                      backgroundColor: clothingColorError ? '#fff5f5' : '',
-                      boxShadow: clothingColorError ? '0 0 0 1px #ff4444' : ''
-                    }}
                     required 
                   />
                   <small className="field-hint" style={{ color: clothingColorError ? '#ff4444' : '' }}>
@@ -2210,11 +1892,6 @@ export const App = () => {
                   className="btn btn-success" 
                   onClick={handleConfirmStation}
                   disabled={isLoading}
-                  style={{
-                    backgroundColor: clothingColorError || stationError ? '#ff4444' : '',
-                    borderColor: clothingColorError || stationError ? '#ff4444' : '',
-                    marginTop: clothingColorError || stationError ? '15px' : '0'
-                  }}
                 >
                   {isLoading ? 'Присоединение...' : 'Подтвердить параметры и присоединиться'}
                 </button>
@@ -2235,7 +1912,7 @@ export const App = () => {
                 <button className="nav-btn active">3. Комната станции</button>
               </div>
               
-              <p>Расскажите о своем состоянии другим участникам</p>
+              <p>Расскажите о своем состоянии другим участников</p>
               
               <div className="status-indicators" id="current-user-status">
                 <div className="status-indicator" id="position-indicator">
@@ -2313,7 +1990,7 @@ export const App = () => {
         </div>
         
         <footer>
-          &copy; 2025 | Гаджи Латипов | Метрос | Санкт  Петербург
+          &copy; 2025 | Гаджи Латипов | Метрос | Санкт Петербург
         </footer>
       </div>
     </div>
