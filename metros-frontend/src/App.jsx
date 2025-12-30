@@ -3,30 +3,22 @@ import bridge from '@vkontakte/vk-bridge';
 import './App.css';
 import { api, helpers } from './services/api';
 
-// Генерация уникального ID устройства с улучшенным хранением в VK Storage
-const generateDeviceId = async () => {
-  try {
-    // Пытаемся получить deviceId из VK Storage
-    const storedDeviceId = await getVKStorageItem('deviceId');
-    
-    if (storedDeviceId) {
-      console.log('📱 Получен deviceId из VK Storage:', storedDeviceId);
-      return storedDeviceId;
-    }
-    
-    // Если нет в VK Storage, создаем новый
-    const deviceId = 'device_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
-    
-    // Сохраняем в VK Storage
-    await setVKStorageItem('deviceId', deviceId);
-    
-    console.log('🆕 Создан новый deviceId:', deviceId);
-    return deviceId;
-  } catch (error) {
-    console.error('❌ Ошибка при генерации deviceId:', error);
-    // Fallback: генерируем временный ID
-    return 'device_' + Math.random().toString(36).substr(2, 9);
+// Генерация уникального ID устройства с улучшенным хранением
+const generateDeviceId = () => {
+  let deviceId = localStorage.getItem('deviceId');
+  
+  if (!deviceId) {
+    deviceId = sessionStorage.getItem('deviceId');
   }
+  
+  if (!deviceId) {
+    deviceId = 'device_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+    localStorage.setItem('deviceId', deviceId);
+    sessionStorage.setItem('deviceId', deviceId);
+    console.log('🆕 Создан новый deviceId:', deviceId);
+  }
+  
+  return deviceId;
 };
 
 // Генерация сессии с учетом устройства
@@ -34,212 +26,54 @@ const generateSessionId = (deviceId) => {
   return `session_${deviceId}_${Date.now()}`;
 };
 
-// Функции для работы с VK Storage
-const setVKStorageItem = async (key, value) => {
-  try {
-    if (!key || typeof key !== 'string') {
-      console.error('❌ Ключ для VK Storage должен быть строкой');
-      return false;
-    }
-    
-    // Проверяем длину ключа (максимум 100 символов)
-    if (key.length > 100) {
-      console.error('❌ Ключ слишком длинный (максимум 100 символов)');
-      return false;
-    }
-    
-    // Проверяем допустимые символы в ключе
-    const keyRegex = /^[a-zA-Z_\-0-9]+$/;
-    if (!keyRegex.test(key)) {
-      console.error('❌ Ключ содержит недопустимые символы. Допустимы только: буквы a-z, A-Z, цифры 0-9, _, -');
-      return false;
-    }
-    
-    // Обрезаем значение до 4096 символов для VK Storage
-    const truncatedValue = typeof value === 'string' ? value.substring(0, 4096) : String(value).substring(0, 4096);
-    
-    const result = await bridge.send('VKWebAppStorageSet', {
-      key: key,
-      value: truncatedValue
-    });
-    
-    if (result && result.result) {
-      console.log('💾 Сохранено в VK Storage:', key);
-      return true;
-    }
-    
-    return false;
-  } catch (error) {
-    console.error('❌ Ошибка сохранения в VK Storage:', error);
-    return false;
-  }
-};
-
-const getVKStorageItem = async (key) => {
-  try {
-    if (!key || typeof key !== 'string') {
-      console.error('❌ Ключ для VK Storage должен быть строкой');
-      return null;
-    }
-    
-    const result = await bridge.send('VKWebAppStorageGet', {
-      keys: [key]
-    });
-    
-    if (result && result.keys && result.keys.length > 0) {
-      const item = result.keys.find(item => item.key === key);
-      if (item) {
-        console.log('📂 Получено из VK Storage:', key);
-        return item.value;
-      }
-    }
-    
-    return null;
-  } catch (error) {
-    console.error('❌ Ошибка получения из VK Storage:', error);
-    return null;
-  }
-};
-
-const removeVKStorageItem = async (key) => {
-  try {
-    const result = await bridge.send('VKWebAppStorageSet', {
-      key: key,
-      value: ''
-    });
-    
-    if (result && result.result) {
-      console.log('🧹 Удалено из VK Storage:', key);
-      return true;
-    }
-    
-    return false;
-  } catch (error) {
-    console.error('❌ Ошибка удаления из VK Storage:', error);
-    return false;
-  }
-};
-
-const getAllVKStorageKeys = async () => {
-  try {
-    const result = await bridge.send('VKWebAppStorageGetKeys');
-    
-    if (result && result.keys) {
-      console.log('📋 Получены ключи из VK Storage:', result.keys);
-      return result.keys;
-    }
-    
-    return [];
-  } catch (error) {
-    console.error('❌ Ошибка получения ключей из VK Storage:', error);
-    return [];
-  }
-};
-
-// Сохранение состояния сессии в VK Storage
-const saveSessionState = async (state) => {
+// Сохранение состояния сессии
+const saveSessionState = (state) => {
   try {
     const sessionData = {
       ...state,
       timestamp: Date.now()
     };
-    
-    const sessionString = JSON.stringify(sessionData);
-    
-    // Сохраняем в VK Storage
-    const saved = await setVKStorageItem('metro_session_state', sessionString);
-    
-    if (saved) {
-      console.log('💾 Сохранено состояние сессии в VK Storage');
-      return true;
-    }
-    
-    return false;
+    localStorage.setItem('metro_session_state', JSON.stringify(sessionData));
+    sessionStorage.setItem('metro_session_state', JSON.stringify(sessionData));
+    console.log('💾 Сохранено состояние сессии');
   } catch (error) {
-    console.error('❌ Ошибка сохранения состояния сессии в VK Storage:', error);
-    return false;
+    console.error('❌ Ошибка сохранения состояния сессии:', error);
   }
 };
 
-// Загрузка состояния сессии из VK Storage
-const loadSessionState = async () => {
+// Загрузка состояния сессии
+const loadSessionState = () => {
   try {
-    const sessionData = await getVKStorageItem('metro_session_state');
+    let sessionData = localStorage.getItem('metro_session_state');
+    
+    if (!sessionData) {
+      sessionData = sessionStorage.getItem('metro_session_state');
+    }
     
     if (sessionData) {
       const parsed = JSON.parse(sessionData);
       const now = Date.now();
       
       if (now - parsed.timestamp < 30 * 60 * 1000) {
-        console.log('📂 Загружено сохраненное состояние сессии из VK Storage');
+        console.log('📂 Загружено сохраненное состояние сессии');
         return parsed;
       } else {
         console.log('🕒 Состояние сессии устарело');
-        await clearSessionState();
+        clearSessionState();
       }
     }
   } catch (error) {
-    console.error('❌ Ошибка загрузки состояния сессии из VK Storage:', error);
+    console.error('❌ Ошибка загрузки состояния сессии:', error);
   }
   
   return null;
 };
 
-// Очистка состояния сессии из VK Storage
-const clearSessionState = async () => {
-  try {
-    await removeVKStorageItem('metro_session_state');
-    console.log('🧹 Очищено состояние сессии из VK Storage');
-    return true;
-  } catch (error) {
-    console.error('❌ Ошибка очистки состояния сессии из VK Storage:', error);
-    return false;
-  }
-};
-
-// Сохранение всех настроек в VK Storage
-const saveAllSettingsToVKStorage = async (settings) => {
-  try {
-    console.log('💾 Сохраняем все настройки в VK Storage');
-    
-    // Сохраняем каждую настройку отдельно
-    const savePromises = Object.entries(settings).map(async ([key, value]) => {
-      if (value !== undefined && value !== null) {
-        await setVKStorageItem(key, String(value));
-      }
-    });
-    
-    await Promise.all(savePromises);
-    
-    console.log('✅ Все настройки сохранены в VK Storage');
-    return true;
-  } catch (error) {
-    console.error('❌ Ошибка сохранения настроек в VK Storage:', error);
-    return false;
-  }
-};
-
-// Загрузка всех настроек из VK Storage
-const loadAllSettingsFromVKStorage = async (keys) => {
-  try {
-    console.log('📂 Загружаем настройки из VK Storage');
-    
-    const settings = {};
-    
-    // Загружаем каждую настройку отдельно
-    for (const key of keys) {
-      const value = await getVKStorageItem(key);
-      if (value !== null) {
-        settings[key] = value;
-      }
-    }
-    
-    console.log('✅ Настройки загружены из VK Storage:', Object.keys(settings));
-    return settings;
-  } catch (error) {
-    console.error('❌ Ошибка загрузки настроек из VK Storage:', error);
-    return {};
-  }
+// Очистка состояния сессии
+const clearSessionState = () => {
+  localStorage.removeItem('metro_session_state');
+  sessionStorage.removeItem('metro_session_state');
+  console.log('🧹 Очищено состояние сессии');
 };
 
 // Функция для установки пользователя в оффлайн
@@ -386,19 +220,10 @@ export const App = () => {
     console.log('✅ React компонент App загружен');
     
     // Инициализация устройства
-    const initializeDevice = async () => {
-      try {
-        const generatedDeviceId = await generateDeviceId();
-        setDeviceId(generatedDeviceId);
-        console.log('📱 Идентификатор устройства:', generatedDeviceId);
-      } catch (error) {
-        console.error('❌ Ошибка инициализации устройства:', error);
-        const fallbackDeviceId = 'device_' + Math.random().toString(36).substr(2, 9);
-        setDeviceId(fallbackDeviceId);
-      }
-    };
+    const generatedDeviceId = generateDeviceId();
+    setDeviceId(generatedDeviceId);
     
-    initializeDevice();
+    console.log('📱 Идентификатор устройства:', generatedDeviceId);
     
     // Инициализация VK Bridge
     bridge.send("VKWebAppInit")
@@ -423,7 +248,7 @@ export const App = () => {
         
         // Устанавливаем пользователя в оффлайн
         if (userIdRef.current) {
-          setUserOffline(userIdRef.current, sessionIdRef.current, deviceId);
+          setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
         }
       } else {
         console.log('📱 Приложение активно');
@@ -459,7 +284,7 @@ export const App = () => {
           setAppState('background');
           // Устанавливаем пользователя в оффлайн
           if (userIdRef.current) {
-            setUserOffline(userIdRef.current, sessionIdRef.current, deviceId);
+            setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
           }
           break;
         case 'VKWebAppViewRestore':
@@ -503,19 +328,19 @@ export const App = () => {
       try {
         console.log('🔄 Начинаем восстановление сессии...');
         
-        // Пытаемся загрузить сохраненное состояние из VK Storage
-        const savedState = await loadSessionState();
+        // Пытаемся загрузить сохраненное состояние
+        const savedState = loadSessionState();
         
         if (savedState) {
-          console.log('📂 Используем сохраненное состояние сессии из VK Storage');
+          console.log('📂 Используем сохраненное состояние сессии');
           
           // Восстанавливаем состояние из сохраненных данных
-          await restoreFromSavedState(savedState);
+          await restoreFromSavedState(savedState, generatedDeviceId);
         } else {
           console.log('🆕 Нет сохраненного состояния, начинаем с сервера');
           
           // Пытаемся восстановить с сервера
-          await checkAndRestoreSession();
+          await checkAndRestoreSession(generatedDeviceId);
         }
       } catch (error) {
         console.error('❌ Критическая ошибка восстановления сессии:', error);
@@ -550,13 +375,13 @@ export const App = () => {
       
       // Устанавливаем пользователя в оффлайн при размонтировании
       if (userIdRef.current) {
-        setUserOffline(userIdRef.current, sessionIdRef.current, deviceId);
+        setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
       }
     };
   }, []);
 
-  // Восстановление из сохраненного состояния из VK Storage
-  const restoreFromSavedState = async (savedState) => {
+  // Восстановление из сохраненного состояния
+  const restoreFromSavedState = async (savedState, deviceId) => {
     try {
       console.log('🔄 Восстанавливаем из сохраненного состояния:', savedState);
       
@@ -573,14 +398,11 @@ export const App = () => {
         userIdRef.current = savedState.userId;
       }
       
-      // Загружаем текущий deviceId
-      const currentDeviceId = await generateDeviceId();
-      
       // Проверяем сессию на сервере
       const users = await api.getUsers();
       const serverSession = users.find(user => 
         user.id === savedState.userId &&
-        user.device_id === currentDeviceId &&
+        user.device_id === deviceId &&
         user.online === true
       );
       
@@ -589,14 +411,14 @@ export const App = () => {
         console.log('✅ Сессия найдена на сервере, продолжаем восстановление');
         
         // Обновляем сессию
-        const newSessionId = generateSessionId(currentDeviceId);
+        const newSessionId = generateSessionId(deviceId);
         sessionIdRef.current = newSessionId;
         
         await api.updateUser(serverSession.id, {
           session_id: newSessionId,
           online: true,
           last_seen: new Date().toISOString(),
-          device_id: currentDeviceId
+          device_id: deviceId
         });
         
         // Загружаем данные станций
@@ -634,7 +456,7 @@ export const App = () => {
         // Сессии нет на сервере, начинаем заново
         console.log('❌ Сессия не найдена на сервере, начинаем заново');
         setCurrentScreen('setup');
-        await clearSessionState();
+        clearSessionState();
       }
       
     } catch (error) {
@@ -644,20 +466,19 @@ export const App = () => {
   };
 
   // Проверка и восстановление сессии с сервера
-  const checkAndRestoreSession = async () => {
+  const checkAndRestoreSession = async (deviceId) => {
     try {
-      const currentDeviceId = await generateDeviceId();
-      console.log('🔍 Ищем активные сессии для устройства:', currentDeviceId);
+      console.log('🔍 Ищем активные сессии для устройства:', deviceId);
       
       const users = await api.getUsers();
       const now = Date.now();
       
       // 1. Ищем самую свежую сессию для этого устройства
       const deviceSessions = users.filter(user => 
-        user.device_id === currentDeviceId
+        user.device_id === deviceId
       );
       
-      console.log(`📊 Найдено сессий для устройства ${currentDeviceId}:`, deviceSessions.length);
+      console.log(`📊 Найдено сессий для устройства ${deviceId}:`, deviceSessions.length);
       
       if (deviceSessions.length === 0) {
         console.log('🆕 Нет сессий для этого устройства, начинаем с настройки');
@@ -684,17 +505,17 @@ export const App = () => {
         userIdRef.current = latestSession.id;
         
         // Генерируем новую сессию
-        const newSessionId = generateSessionId(currentDeviceId);
+        const newSessionId = generateSessionId(deviceId);
         sessionIdRef.current = newSessionId;
         
         // Деактивируем все другие сессии с этого устройства
-        await deactivateOtherDeviceSessions(currentDeviceId, latestSession.id);
+        await deactivateOtherDeviceSessions(deviceId, latestSession.id);
         
         // Восстанавливаем состояние
         await restoreUserSession(latestSession);
         
-        // Сохраняем состояние в VK Storage
-        await saveSessionState({
+        // Сохраняем состояние
+        saveSessionState({
           userId: latestSession.id,
           nickname: latestSession.name,
           selectedCity: latestSession.city,
@@ -710,7 +531,7 @@ export const App = () => {
           session_id: newSessionId,
           online: true,
           last_seen: new Date().toISOString(),
-          device_id: currentDeviceId
+          device_id: deviceId
         });
         
         console.log('🔄 Сессия успешно восстановлена с сервера');
@@ -718,10 +539,10 @@ export const App = () => {
         console.log('🕒 Сессия неактивна или устарела');
         
         // Деактивируем все сессии с этого устройства
-        await deactivateAllDeviceSessions(currentDeviceId);
+        await deactivateAllDeviceSessions(deviceId);
         
-        // Очищаем сохраненное состояние в VK Storage
-        await clearSessionState();
+        // Очищаем сохраненное состояние
+        clearSessionState();
         
         // Начинаем с настройки
         setCurrentScreen('setup');
@@ -1074,47 +895,53 @@ export const App = () => {
     };
   }, [currentScreen, currentGroup, deviceId]);
 
-  // Сохранение состояний в VK Storage при изменениях
+  // Сохранение состояний в localStorage и sessionStorage при изменениях
   useEffect(() => {
-    const saveSettings = async () => {
-      try {
-        const settings = {
-          selectedCity,
-          selectedGender,
-          selectedPosition,
-          selectedMood,
-          selectedStation: currentSelectedStation,
-          selectedTimerMinutes: selectedMinutes,
-          nickname,
-          clothingColor,
-          wagonNumber,
-          currentScreen
-        };
-        
-        await saveAllSettingsToVKStorage(settings);
-        
-        // Также сохраняем полное состояние сессии
-        if (userIdRef.current && !isColdStart) {
-          const sessionState = {
-            userId: userIdRef.current,
-            nickname,
-            selectedCity,
-            selectedGender,
-            clothingColor,
-            wagonNumber,
-            currentSelectedStation,
-            currentScreen,
-            timestamp: Date.now()
-          };
-          
-          await saveSessionState(sessionState);
-        }
-      } catch (error) {
-        console.error('❌ Ошибка сохранения настроек в VK Storage:', error);
-      }
-    };
+    // Сохраняем в localStorage для долгосрочного хранения
+    localStorage.setItem('selectedCity', selectedCity);
+    localStorage.setItem('selectedGender', selectedGender);
+    localStorage.setItem('selectedPosition', selectedPosition);
+    localStorage.setItem('selectedMood', selectedMood);
+    localStorage.setItem('selectedStation', currentSelectedStation);
+    localStorage.setItem('selectedTimerMinutes', selectedMinutes);
+    localStorage.setItem('nickname', nickname);
+    localStorage.setItem('clothingColor', clothingColor);
+    localStorage.setItem('wagonNumber', wagonNumber);
+    localStorage.setItem('currentScreen', currentScreen);
     
-    saveSettings();
+    // Также сохраняем в sessionStorage для быстрого восстановления
+    sessionStorage.setItem('selectedCity', selectedCity);
+    sessionStorage.setItem('selectedGender', selectedGender);
+    sessionStorage.setItem('selectedPosition', selectedPosition);
+    sessionStorage.setItem('selectedMood', selectedMood);
+    sessionStorage.setItem('selectedStation', currentSelectedStation);
+    sessionStorage.setItem('selectedTimerMinutes', selectedMinutes);
+    sessionStorage.setItem('nickname', nickname);
+    sessionStorage.setItem('clothingColor', clothingColor);
+    sessionStorage.setItem('wagonNumber', wagonNumber);
+    sessionStorage.setItem('currentScreen', currentScreen);
+    
+    if (currentGroup) {
+      localStorage.setItem('currentGroup', JSON.stringify(currentGroup));
+      sessionStorage.setItem('currentGroup', JSON.stringify(currentGroup));
+    }
+    
+    // Сохраняем полное состояние сессии при значимых изменениях
+    if (userIdRef.current && !isColdStart) {
+      const sessionState = {
+        userId: userIdRef.current,
+        nickname,
+        selectedCity,
+        selectedGender,
+        clothingColor,
+        wagonNumber,
+        currentSelectedStation,
+        currentScreen,
+        timestamp: Date.now()
+      };
+      
+      saveSessionState(sessionState);
+    }
   }, [
     selectedCity, selectedGender, selectedPosition, selectedMood,
     currentSelectedStation, selectedMinutes, nickname, clothingColor,
@@ -1270,11 +1097,10 @@ export const App = () => {
     try {
       const users = await api.getUsers();
       const trimmedNickname = nickname.trim();
-      const currentDeviceId = await generateDeviceId();
       
       // Проверяем, нет ли активной сессии с этого устройства
       const existingDeviceSession = users.find(user => 
-        user.device_id === currentDeviceId && 
+        user.device_id === deviceId && 
         user.online === true
       );
       
@@ -1303,13 +1129,13 @@ export const App = () => {
         }
         
         // Обновляем существующую сессию
-        const newSessionId = generateSessionId(currentDeviceId);
+        const newSessionId = generateSessionId(deviceId);
         createdUser = await api.updateUser(existingDeviceSession.id, {
           name: trimmedNickname,
           city: selectedCity,
           gender: selectedGender,
           session_id: newSessionId,
-          device_id: currentDeviceId,
+          device_id: deviceId,
           vk_user_id: vkUserIdRef.current,
           online: true,
           is_waiting: true,
@@ -1325,7 +1151,7 @@ export const App = () => {
         console.log('🆕 Создаем новую сессию');
         
         // Деактивируем все сессии с этого устройства перед созданием новой
-        await deactivateAllDeviceSessions(currentDeviceId);
+        await deactivateAllDeviceSessions(deviceId);
         
         // Если есть активная сессия с таким же никнеймом, деактивируем её
         if (existingNicknameSession) {
@@ -1338,7 +1164,7 @@ export const App = () => {
           });
         }
         
-        const newSessionId = generateSessionId(currentDeviceId);
+        const newSessionId = generateSessionId(deviceId);
         const userData = {
           name: trimmedNickname,
           station: '',
@@ -1355,7 +1181,7 @@ export const App = () => {
           is_waiting: true,
           is_connected: false,
           session_id: newSessionId,
-          device_id: currentDeviceId,
+          device_id: deviceId,
           vk_user_id: vkUserIdRef.current,
           last_seen: new Date().toISOString()
         };
@@ -1370,8 +1196,8 @@ export const App = () => {
       }
       
       if (createdUser) {
-        // Сохраняем состояние сессии в VK Storage
-        await saveSessionState({
+        // Сохраняем состояние сессии
+        saveSessionState({
           userId: userIdRef.current,
           nickname: trimmedNickname,
           selectedCity,
@@ -1436,8 +1262,6 @@ export const App = () => {
 
     setIsLoading(true);
     try {
-      const currentDeviceId = await generateDeviceId();
-      
       // Обновляем пользователя
       await api.updateUser(userIdRef.current, {
         station: currentSelectedStation,
@@ -1448,7 +1272,7 @@ export const App = () => {
         is_connected: true,
         online: true,
         session_id: sessionIdRef.current,
-        device_id: currentDeviceId,
+        device_id: deviceId,
         last_seen: new Date().toISOString(),
         status: 'Выбрал станцию: ' + currentSelectedStation
       });
@@ -1469,8 +1293,8 @@ export const App = () => {
       setCurrentGroup(groupData);
       setCurrentScreen('joined');
       
-      // Сохраняем состояние сессии в VK Storage
-      await saveSessionState({
+      // Сохраняем состояние сессии
+      saveSessionState({
         userId: userIdRef.current,
         nickname: nickname.trim(),
         selectedCity,
@@ -1507,21 +1331,19 @@ export const App = () => {
   const handleLeaveGroup = async () => {
     if (userIdRef.current) {
       try {
-        const currentDeviceId = await generateDeviceId();
-        
         await api.updateUser(userIdRef.current, { 
           status: 'Ожидание',
           is_waiting: true,
           is_connected: false,
           station: '',
           session_id: sessionIdRef.current,
-          device_id: currentDeviceId,
+          device_id: deviceId,
           last_seen: new Date().toISOString()
         });
         console.log('✅ Пользователь вышел из группы');
         
-        // Обновляем сохраненное состояние в VK Storage
-        await saveSessionState({
+        // Обновляем сохраненное состояние
+        saveSessionState({
           userId: userIdRef.current,
           nickname,
           selectedCity,
@@ -1593,14 +1415,12 @@ export const App = () => {
     
     try {
       const newStatus = generateUserStatus();
-      const currentDeviceId = await generateDeviceId();
-      
       await api.updateUser(userIdRef.current, { 
         status: newStatus,
         position: selectedPosition,
         mood: selectedMood,
         session_id: sessionIdRef.current,
-        device_id: currentDeviceId,
+        device_id: deviceId,
         last_seen: new Date().toISOString()
       });
       
@@ -1632,13 +1452,11 @@ export const App = () => {
     if (now - lastPingTime < PING_INTERVAL) return false;
     
     try {
-      const currentDeviceId = await generateDeviceId();
-      
       const updateData = { 
         online: true,
         is_connected: currentScreen === 'joined',
         session_id: sessionIdRef.current,
-        device_id: currentDeviceId,
+        device_id: deviceId,
         last_seen: new Date().toISOString(),
         ...(currentScreen === 'joined' && currentGroup && { 
           station: currentGroup.station 
@@ -1664,7 +1482,7 @@ export const App = () => {
     const handleBeforeUnload = async (event) => {
       console.log('⚠️ Страница закрывается или перезагружается');
       
-      // Сохраняем текущее состояние в VK Storage
+      // Сохраняем текущее состояние
       if (userIdRef.current) {
         const sessionState = {
           userId: userIdRef.current,
@@ -1678,12 +1496,11 @@ export const App = () => {
           timestamp: Date.now()
         };
         
-        await saveSessionState(sessionState);
+        saveSessionState(sessionState);
         
         // Устанавливаем пользователя в оффлайн
         try {
-          const currentDeviceId = await generateDeviceId();
-          await setUserOffline(userIdRef.current, sessionIdRef.current, currentDeviceId);
+          await setUserOffline(userIdRef.current, sessionIdRef.current, deviceId);
         } catch (error) {
           console.error('❌ Ошибка при установке оффлайн статуса:', error);
         }
@@ -1697,10 +1514,9 @@ export const App = () => {
     window.addEventListener('pagehide', handleBeforeUnload);
     
     // Для iOS Safari
-    document.addEventListener('visibilitychange', async () => {
+    document.addEventListener('visibilitychange', () => {
       if (document.hidden && userIdRef.current) {
-        const currentDeviceId = await generateDeviceId();
-        setUserOffline(userIdRef.current, sessionIdRef.current, currentDeviceId);
+        setUserOffline(userIdRef.current, sessionIdRef.current, deviceId);
       }
     });
     
