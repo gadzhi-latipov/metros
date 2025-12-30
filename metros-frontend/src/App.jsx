@@ -358,8 +358,8 @@ export const App = () => {
   const [isColdStart, setIsColdStart] = useState(true);
   const [notificationText, setNotificationText] = useState('');
   
-  const CACHE_DURATION = 30000;
-  const PING_INTERVAL = 60000; // Увеличиваем интервал пинга до 60 секунд
+  const CACHE_DURATION = 60000; // Увеличиваем до 60 секунд
+  const PING_INTERVAL = 120000; // Увеличиваем до 120 секунд (2 минуты)
 
   const userIdRef = useRef(null);
   const globalRefreshIntervalRef = useRef(null);
@@ -375,9 +375,42 @@ export const App = () => {
   const backgroundPingIntervalRef = useRef(null);
   const isAppClosingRef = useRef(false);
   const lastApiCallRef = useRef(0);
-  const apiCallCooldownRef = useRef(2000); // Увеличиваем задержку до 2 секунд
-  const isInBackgroundRef = useRef(false); // Новый флаг для отслеживания фонового режима
-  const pingTimeoutRef = useRef(null); // Таймаут для пинга
+  const apiCallCooldownRef = useRef(3000); // Увеличиваем задержку до 3 секунд
+  const isInBackgroundRef = useRef(false);
+  const pingTimeoutRef = useRef(null);
+
+  // Улучшенная функция для API вызовов с задержкой и повторными попытками
+  const safeApiCall = async (apiFunction, ...args) => {
+    const now = Date.now();
+    const timeSinceLastCall = now - lastApiCallRef.current;
+    
+    // Если прошло меньше времени чем задержка, ждем
+    if (timeSinceLastCall < apiCallCooldownRef.current) {
+      const waitTime = apiCallCooldownRef.current - timeSinceLastCall;
+      console.log(`⏳ Задержка API вызова: ${waitTime}мс`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    
+    lastApiCallRef.current = Date.now();
+    
+    // Пытаемся выполнить запрос с повторными попытками
+    let lastError;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await apiFunction(...args);
+      } catch (error) {
+        lastError = error;
+        console.warn(`⚠️ Попытка ${attempt}/3 не удалась:`, error.message);
+        
+        if (attempt < 3) {
+          // Ждем перед следующей попыткой
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+        }
+      }
+    }
+    
+    throw lastError || new Error('API вызов не удался после 3 попыток');
+  };
 
   // Основная инициализация приложения
   useEffect(() => {
@@ -610,26 +643,10 @@ export const App = () => {
       } catch (error) {
         console.error('❌ Ошибка глобального обновления:', error);
       }
-    }, 60000); // Увеличиваем интервал до 60 секунд
+    }, 120000); // Увеличиваем интервал до 120 секунд (2 минуты)
     
     globalRefreshIntervalRef.current = interval;
     return () => clearInterval(interval);
-  };
-
-  // Улучшенная функция для API вызовов с задержкой
-  const safeApiCall = async (apiFunction, ...args) => {
-    const now = Date.now();
-    const timeSinceLastCall = now - lastApiCallRef.current;
-    
-    // Если прошло меньше времени чем задержка, ждем
-    if (timeSinceLastCall < apiCallCooldownRef.current) {
-      const waitTime = apiCallCooldownRef.current - timeSinceLastCall;
-      console.log(`⏳ Задержка API вызова: ${waitTime}мс`);
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-    }
-    
-    lastApiCallRef.current = Date.now();
-    return apiFunction(...args);
   };
 
   // Восстановление из сохраненного состояния из VK Storage
@@ -645,31 +662,63 @@ export const App = () => {
       if (savedState.wagonNumber) setWagonNumber(savedState.wagonNumber);
       if (savedState.currentSelectedStation) setCurrentSelectedStation(savedState.currentSelectedStation);
       
-      // Устанавливаем userId если есть
-      if (savedState.userId) {
-        userIdRef.current = savedState.userId;
-      }
-      
       // Загружаем текущий deviceId
       const currentDeviceId = await generateDeviceId();
       
       try {
-        // Проверяем сессию на сервере
+        // Получаем всех пользователей с сервера
         const users = await safeApiCall(api.getUsers);
-        const serverSession = users.find(user => 
-          user.id === savedState.userId &&
-          user.device_id === currentDeviceId
-        );
+        
+        // Ищем сессию по нескольким параметрам
+        let serverSession = null;
+        
+        // 1. Сначала ищем по userId (если есть в savedState)
+        if (savedState.userId) {
+          serverSession = users.find(user => user.id === savedState.userId);
+          if (serverSession) {
+            console.log('✅ Нашли сессию по userId:', savedState.userId);
+          }
+        }
+        
+        // 2. Если не нашли по userId, ищем по deviceId и имени
+        if (!serverSession && savedState.nickname) {
+          serverSession = users.find(user => 
+            user.device_id === currentDeviceId && 
+            user.name === savedState.nickname &&
+            user.online === true
+          );
+          if (serverSession) {
+            console.log('✅ Нашли сессию по deviceId и имени:', serverSession.id);
+          }
+        }
+        
+        // 3. Если все еще не нашли, ищем по deviceId (любую активную сессию)
+        if (!serverSession) {
+          serverSession = users.find(user => 
+            user.device_id === currentDeviceId &&
+            user.online === true
+          );
+          if (serverSession) {
+            console.log('✅ Нашли сессию по deviceId:', serverSession.id);
+          }
+        }
         
         if (serverSession) {
-          // Сессия существует на сервере
+          // Сессия найдена на сервере
           console.log('✅ Сессия найдена на сервере, продолжаем восстановление');
+          
+          // Сохраняем userId для использования
+          userIdRef.current = serverSession.id;
           
           // Обновляем сессию и устанавливаем онлайн
           const newSessionId = generateSessionId(currentDeviceId);
           sessionIdRef.current = newSessionId;
           
+          // Устанавливаем пользователя онлайн
           await setUserOnline(serverSession.id, newSessionId, currentDeviceId);
+          
+          // Восстанавливаем данные пользователя из сервера (они могут быть актуальнее)
+          await restoreUserSession(serverSession);
           
           // Загружаем данные станций
           await loadStationsMap();
@@ -704,6 +753,20 @@ export const App = () => {
             // Непонятное состояние - показываем настройки
             setCurrentScreen('setup');
           }
+          
+          // Обновляем сохраненное состояние с актуальными данными
+          await saveSessionState({
+            userId: serverSession.id,
+            nickname: serverSession.name || savedState.nickname,
+            selectedCity: serverSession.city || savedState.selectedCity || 'spb',
+            selectedGender: serverSession.gender || savedState.selectedGender || 'male',
+            clothingColor: serverSession.color || savedState.clothingColor || '',
+            wagonNumber: serverSession.wagon || savedState.wagonNumber || '',
+            currentSelectedStation: serverSession.station || savedState.currentSelectedStation,
+            currentScreen: serverSession.is_connected ? 'joined' : 'waiting',
+            timestamp: Date.now()
+          });
+          
         } else {
           // Сессии нет на сервере, начинаем заново
           console.log('❌ Сессия не найдена на сервере, начинаем заново');
@@ -713,6 +776,7 @@ export const App = () => {
         }
       } catch (apiError) {
         console.error('❌ Ошибка API при восстановлении сессии:', apiError);
+        // Показываем setup экран при ошибке API
         setCurrentScreen('setup');
         showNotification('Ошибка подключения к серверу', 'error');
       }
@@ -732,15 +796,16 @@ export const App = () => {
       try {
         const users = await safeApiCall(api.getUsers);
         
-        // 1. Ищем самую свежую сессию для этого устройства
+        // Ищем самую свежую сессию для этого устройства
         const deviceSessions = users.filter(user => 
-          user.device_id === currentDeviceId
+          user.device_id === currentDeviceId &&
+          user.online === true
         );
         
-        console.log(`📊 Найдено сессий для устройства ${currentDeviceId}:`, deviceSessions.length);
+        console.log(`📊 Найдено активных сессий для устройства ${currentDeviceId}:`, deviceSessions.length);
         
         if (deviceSessions.length === 0) {
-          console.log('🆕 Нет сессий для этого устройства, начинаем с настройки');
+          console.log('🆕 Нет активных сессий для этого устройства, начинаем с настройки');
           setCurrentScreen('setup');
           return;
         }
@@ -778,7 +843,8 @@ export const App = () => {
           clothingColor: latestSession.color,
           wagonNumber: latestSession.wagon,
           currentSelectedStation: latestSession.station,
-          currentScreen: latestSession.is_connected ? 'joined' : 'waiting'
+          currentScreen: latestSession.is_connected ? 'joined' : 'waiting',
+          timestamp: Date.now()
         });
         
         console.log('🔄 Сессия успешно восстановлена с сервера');
@@ -1036,7 +1102,7 @@ export const App = () => {
     // Добавляем задержку для предотвращения частых сохранений
     const timeoutId = setTimeout(() => {
       saveSettings();
-    }, 2000);
+    }, 3000);
     
     return () => clearTimeout(timeoutId);
   }, [
@@ -1050,7 +1116,7 @@ export const App = () => {
     if (userIdRef.current && (selectedPosition || selectedMood)) {
       const timeoutId = setTimeout(() => {
         updateUserState();
-      }, 3000); // Увеличиваем задержку до 3 секунд
+      }, 5000); // Увеличиваем задержку до 5 секунд
       
       return () => clearTimeout(timeoutId);
     }
@@ -1130,11 +1196,9 @@ export const App = () => {
     setIsLoading(true);
 
     try {
-      const users = await safeApiCall(api.getUsers);
       const trimmedNickname = nickname.trim();
       const currentDeviceId = await generateDeviceId();
       
-      let createdUser;
       const newSessionId = generateSessionId(currentDeviceId);
       
       // Создаем нового пользователя
@@ -1143,8 +1207,8 @@ export const App = () => {
       const userData = {
         name: trimmedNickname,
         station: '',
-        wagon: '',
-        color: '',
+        wagon: wagonNumber || '',
+        color: clothingColor || '',
         colorCode: helpers.getRandomColor(),
         status: 'В режиме ожидания',
         timer: "00:00",
@@ -1161,15 +1225,13 @@ export const App = () => {
         last_seen: new Date().toISOString()
       };
 
-      createdUser = await safeApiCall(api.createUser, userData);
+      const createdUser = await safeApiCall(api.createUser, userData);
       
       if (createdUser) {
         userIdRef.current = createdUser.id;
         sessionIdRef.current = newSessionId;
         console.log('✅ Создана новая сессия:', createdUser.id);
-      }
-      
-      if (createdUser) {
+        
         // Сохраняем состояние сессии в VK Storage
         await saveSessionState({
           userId: userIdRef.current,
