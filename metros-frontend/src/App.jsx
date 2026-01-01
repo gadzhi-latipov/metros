@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import bridge from '@vkontakte/vk-bridge';
 import './App.css';
 import { api, helpers } from './services/api';
@@ -323,6 +323,43 @@ const showNotification = async (text, type = 'info') => {
   }
 };
 
+// Создаем кэш для API запросов
+const createApiCache = () => {
+  const cache = new Map();
+  const maxAge = 60000; // 1 минута для кэша
+  
+  return {
+    get: (key) => {
+      const item = cache.get(key);
+      if (!item) return null;
+      
+      if (Date.now() - item.timestamp > maxAge) {
+        cache.delete(key);
+        return null;
+      }
+      
+      return item.data;
+    },
+    
+    set: (key, data) => {
+      cache.set(key, {
+        data,
+        timestamp: Date.now()
+      });
+    },
+    
+    clear: () => cache.clear(),
+    
+    clearByPrefix: (prefix) => {
+      for (const key of cache.keys()) {
+        if (key.startsWith(prefix)) {
+          cache.delete(key);
+        }
+      }
+    }
+  };
+};
+
 export const App = () => {
   const [fetchedUser, setUser] = useState();
   const [appState, setAppState] = useState('active');
@@ -357,9 +394,10 @@ export const App = () => {
   const [restoreAttempted, setRestoreAttempted] = useState(false);
   const [isColdStart, setIsColdStart] = useState(true);
   const [notificationText, setNotificationText] = useState('');
-  
-  const CACHE_DURATION = 60000; // Увеличиваем до 60 секунд
-  const PING_INTERVAL = 120000; // Увеличиваем до 120 секунд (2 минуты)
+
+  const CACHE_DURATION = 120000; // Увеличиваем до 120 секунд (2 минуты)
+  const PING_INTERVAL = 180000; // Увеличиваем до 180 секунд (3 минуты)
+  const API_COOLDOWN = 2000; // 2 секунды задержки между API вызовами
 
   const userIdRef = useRef(null);
   const globalRefreshIntervalRef = useRef(null);
@@ -375,282 +413,322 @@ export const App = () => {
   const backgroundPingIntervalRef = useRef(null);
   const isAppClosingRef = useRef(false);
   const lastApiCallRef = useRef(0);
-  const apiCallCooldownRef = useRef(3000); // Увеличиваем задержку до 3 секунд
+  const apiCallCooldownRef = useRef(API_COOLDOWN);
   const isInBackgroundRef = useRef(false);
   const pingTimeoutRef = useRef(null);
+  const apiCacheRef = useRef(createApiCache());
+  const abortControllerRef = useRef(new AbortController());
+  const updateQueueRef = useRef([]);
+  const isProcessingQueueRef = useRef(false);
+  const visibilityTimeoutRef = useRef(null);
+  const dataRefreshTimeoutRef = useRef(null);
+  const batchUpdateTimeoutRef = useRef(null);
+  const memoizedStationsRef = useRef(new Map());
 
-  // Улучшенная функция для API вызовов с задержкой и повторными попытками
-  const safeApiCall = async (apiFunction, ...args) => {
+  // Оптимизированная функция для API вызовов с кэшированием и задержкой
+  const safeApiCall = useCallback(async (apiFunction, ...args) => {
     const now = Date.now();
     const timeSinceLastCall = now - lastApiCallRef.current;
     
     // Если прошло меньше времени чем задержка, ждем
     if (timeSinceLastCall < apiCallCooldownRef.current) {
       const waitTime = apiCallCooldownRef.current - timeSinceLastCall;
-      console.log(`⏳ Задержка API вызова: ${waitTime}мс`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
     }
     
     lastApiCallRef.current = Date.now();
     
+    // Создаем ключ для кэша
+    const cacheKey = `${apiFunction.name}_${JSON.stringify(args)}`;
+    
+    // Проверяем кэш только для GET запросов
+    const isGetRequest = apiFunction.name.includes('get') || 
+                        apiFunction.name === 'getUsers' || 
+                        apiFunction.name === 'loadStationsMap';
+    
+    if (isGetRequest) {
+      const cached = apiCacheRef.current.get(cacheKey);
+      if (cached) {
+        console.log('📦 Используем кэшированные данные для:', apiFunction.name);
+        return cached;
+      }
+    }
+    
     // Пытаемся выполнить запрос с повторными попытками
     let lastError;
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
       try {
-        return await apiFunction(...args);
+        const result = await apiFunction(...args);
+        
+        // Кэшируем результат для GET запросов
+        if (isGetRequest) {
+          apiCacheRef.current.set(cacheKey, result);
+        }
+        
+        return result;
       } catch (error) {
         lastError = error;
-        console.warn(`⚠️ Попытка ${attempt}/3 не удалась:`, error.message);
+        console.warn(`⚠️ Попытка ${attempt}/2 не удалась:`, error.message);
         
-        if (attempt < 3) {
+        if (attempt < 2) {
           // Ждем перед следующей попыткой
           await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
         }
       }
     }
     
-    throw lastError || new Error('API вызов не удался после 3 попыток');
-  };
-
-  // Основная инициализация приложения
-  useEffect(() => {
-    console.log('✅ React компонент App загружен');
-    
-    // Инициализация устройства
-    const initializeDevice = async () => {
-      try {
-        const generatedDeviceId = await generateDeviceId();
-        setDeviceId(generatedDeviceId);
-        console.log('📱 Идентификатор устройства:', generatedDeviceId);
-      } catch (error) {
-        console.error('❌ Ошибка инициализации устройства:', error);
-        const fallbackDeviceId = 'device_' + Math.random().toString(36).substr(2, 9);
-        setDeviceId(fallbackDeviceId);
-      }
-    };
-    
-    initializeDevice();
-    
-    // Инициализация VK Bridge
-    bridge.send("VKWebAppInit")
-      .then((data) => {
-        if (data.result) {
-          console.log('✅ VK Bridge инициализирован');
-        } else {
-          console.error('❌ Ошибка инициализации VK Bridge');
-        }
-      })
-      .catch((error) => {
-        console.error('❌ Ошибка инициализации VK Bridge:', error);
-      });
-
-    // Упрощенный обработчик видимости страницы
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        console.log('📱 Приложение ушло в фон');
-        isInBackgroundRef.current = true;
-        setAppState('background');
-      } else {
-        console.log('📱 Приложение активно');
-        isInBackgroundRef.current = false;
-        setAppState('active');
-        // При возвращении на передний план - отправляем пинг
-        if (userIdRef.current) {
-          improvedPingActivity();
-        }
-      }
-    };
-
-    // Обработчик реального закрытия приложения
-    const handleBeforeUnload = async (event) => {
-      console.log('⚠️ Приложение закрывается - устанавливаем оффлайн');
-      isAppClosingRef.current = true;
-      
-      // Очищаем все таймеры и интервалы
-      if (pingTimeoutRef.current) {
-        clearTimeout(pingTimeoutRef.current);
-      }
-      if (backgroundPingIntervalRef.current) {
-        clearInterval(backgroundPingIntervalRef.current);
-      }
-      
-      // Устанавливаем пользователя в оффлайн
-      if (userIdRef.current) {
-        try {
-          const currentDeviceId = await generateDeviceId();
-          await setUserOffline(userIdRef.current, sessionIdRef.current, currentDeviceId);
-        } catch (error) {
-          console.error('❌ Ошибка при установке оффлайн:', error);
-        }
-      }
-    };
-
-    // Подписка на события видимости страницы
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    
-    // Подписка на события реального закрытия
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
-    // Подписка на события VK Bridge
-    const bridgeUnsubscribe = bridge.subscribe((event) => {
-      if (!event.detail) return;
-      
-      const { type, data } = event.detail;
-      console.log('📡 VK Bridge событие:', type);
-      
-      switch (type) {
-        case 'VKWebAppUpdateConfig':
-          const schemeAttribute = document.createAttribute('scheme');
-          schemeAttribute.value = data.scheme ? data.scheme : 'client_light';
-          document.body.attributes.setNamedItem(schemeAttribute);
-          break;
-        case 'VKWebAppViewHide':
-          console.log('📱 VKWebAppViewHide - приложение скрыто');
-          isInBackgroundRef.current = true;
-          setAppState('background');
-          break;
-        case 'VKWebAppViewRestore':
-          console.log('📱 VKWebAppViewRestore - приложение восстановлено');
-          isInBackgroundRef.current = false;
-          setAppState('active');
-          // При восстановлении обновляем статус
-          if (userIdRef.current) {
-            improvedPingActivity();
-          }
-          break;
-        default:
-          break;
-      }
-    });
-
-    // Загрузка данных пользователя VK
-    async function fetchUserData() {
-      try {
-        const user = await bridge.send('VKWebAppGetUserInfo');
-        setUser(user);
-        vkUserIdRef.current = user.id;
-        console.log('👤 Данные пользователя VK загружены:', user.id);
-      } catch (error) {
-        console.error('❌ Ошибка загрузки пользователя:', error);
-      }
-    }
-    
-    fetchUserData();
-    
-    // Восстановление сессии пользователя
-    const restoreSession = async () => {
-      if (sessionRestoreInProgressRef.current) {
-        console.log('🔄 Восстановление сессии уже выполняется, пропускаем');
-        return;
-      }
-      
-      sessionRestoreInProgressRef.current = true;
-      setIsSessionRestoring(true);
-      setRestoreAttempted(true);
-      
-      try {
-        console.log('🔄 Начинаем восстановление сессии...');
-        
-        // Пытаемся загрузить сохраненное состояние из VK Storage
-        const savedState = await loadSessionState();
-        
-        if (savedState) {
-          console.log('📂 Используем сохраненное состояние сессии из VK Storage');
-          
-          // Восстанавливаем состояние из сохраненных данных
-          await restoreFromSavedState(savedState);
-        } else {
-          console.log('🆕 Нет сохраненного состояния, начинаем с сервера');
-          
-          // Пытаемся восстановить с сервера
-          await checkAndRestoreSession();
-        }
-      } catch (error) {
-        console.error('❌ Критическая ошибка восстановления сессии:', error);
-        setCurrentScreen('setup');
-        showNotification('Ошибка восстановления сессии', 'error');
-      } finally {
-        setIsSessionRestoring(false);
-        sessionRestoreInProgressRef.current = false;
-        setIsColdStart(false);
-      }
-    };
-    
-    restoreSession();
-    
-    // Запуск глобального обновления с увеличенным интервалом
-    const cleanupGlobalRefresh = startGlobalRefresh();
-
-    // Запуск периодического пинга
-    const startPeriodicPing = () => {
-      return setInterval(async () => {
-        if (userIdRef.current && !isInBackgroundRef.current) {
-          await improvedPingActivity();
-        }
-      }, PING_INTERVAL);
-    };
-
-    const pingInterval = startPeriodicPing();
-
-    // Очистка при размонтировании
-    return () => {
-      console.log('🧹 Очистка компонента');
-      
-      // Удаляем обработчики событий
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      
-      // Отписываемся от событий VK Bridge
-      if (bridgeUnsubscribe) {
-        bridgeUnsubscribe();
-      }
-      
-      // Очищаем все таймеры и интервалы
-      if (pingTimeoutRef.current) {
-        clearTimeout(pingTimeoutRef.current);
-      }
-      if (pingInterval) {
-        clearInterval(pingInterval);
-      }
-      if (backgroundPingIntervalRef.current) {
-        clearInterval(backgroundPingIntervalRef.current);
-      }
-      if (globalRefreshIntervalRef.current) {
-        clearInterval(globalRefreshIntervalRef.current);
-      }
-      
-      // Устанавливаем пользователя в оффлайн только если это реальное закрытие
-      if (isAppClosingRef.current && userIdRef.current) {
-        const currentDeviceId = deviceId || 'device_' + Math.random().toString(36).substr(2, 9);
-        setUserOffline(userIdRef.current, sessionIdRef.current, currentDeviceId);
-      }
-      
-      cleanupGlobalRefresh();
-    };
+    throw lastError || new Error('API вызов не удался после 2 попыток');
   }, []);
 
-  // Запуск глобального обновления
-  const startGlobalRefresh = () => {
-    const interval = setInterval(async () => {
-      try {
-        if (currentScreen === 'waiting') {
-          await loadStationsMap();
-          await loadRequests();
-        } else if (currentScreen === 'joined' && currentGroup) {
-          await loadGroupMembers(currentGroup.station);
-          await loadRequests();
-        }
-      } catch (error) {
-        console.error('❌ Ошибка глобального обновления:', error);
-      }
-    }, 120000); // Увеличиваем интервал до 120 секунд (2 минуты)
+  // Пакетная обработка обновлений
+  const processUpdateQueue = useCallback(async () => {
+    if (isProcessingQueueRef.current || updateQueueRef.current.length === 0) return;
     
-    globalRefreshIntervalRef.current = interval;
-    return () => clearInterval(interval);
-  };
+    isProcessingQueueRef.current = true;
+    
+    try {
+      // Берем все задачи из очереди
+      const tasks = [...updateQueueRef.current];
+      updateQueueRef.current = [];
+      
+      // Выполняем задачи последовательно
+      for (const task of tasks) {
+        await task();
+      }
+    } catch (error) {
+      console.error('Ошибка обработки очереди обновлений:', error);
+    } finally {
+      isProcessingQueueRef.current = false;
+      
+      // Если в очереди появились новые задачи, обрабатываем их
+      if (updateQueueRef.current.length > 0) {
+        setTimeout(processUpdateQueue, 100);
+      }
+    }
+  }, []);
 
-  // Восстановление из сохраненного состояния из VK Storage
-  const restoreFromSavedState = async (savedState) => {
+  // Добавление задачи в очередь обновлений
+  const queueUpdate = useCallback((updateFn) => {
+    updateQueueRef.current.push(updateFn);
+    
+    if (!isProcessingQueueRef.current) {
+      // Запускаем обработку с небольшой задержкой для батчинга
+      clearTimeout(batchUpdateTimeoutRef.current);
+      batchUpdateTimeoutRef.current = setTimeout(() => {
+        processUpdateQueue();
+      }, 50);
+    }
+  }, [processUpdateQueue]);
+
+  // Оптимизированная функция пинга
+  const improvedPingActivity = useCallback(async () => {
+    if (!userIdRef.current) return false;
+    
+    const now = Date.now();
+    if (now - lastPingTime < 45000) return false; // Не пингуем чаще чем раз в 45 секунд
+    
+    queueUpdate(async () => {
+      try {
+        const currentDeviceId = deviceId || await generateDeviceId();
+        
+        const updateData = { 
+          online: true,
+          is_connected: currentScreen === 'joined',
+          session_id: sessionIdRef.current,
+          device_id: currentDeviceId,
+          last_seen: new Date().toISOString(),
+          ...(currentScreen === 'joined' && currentGroup && { 
+            station: currentGroup.station 
+          })
+        };
+        
+        await safeApiCall(api.updateUser, userIdRef.current, updateData);
+        setLastPingTime(now);
+        
+        if (currentScreen === 'joined') {
+          // Очищаем кэш для группы
+          apiCacheRef.current.clearByPrefix('getUsers');
+          loadGroupMembers();
+        }
+        
+        return true;
+      } catch (error) {
+        console.error('Ошибка пинга активности:', error);
+        return false;
+      }
+    });
+    
+    return true;
+  }, [currentScreen, currentGroup, deviceId, safeApiCall, queueUpdate, lastPingTime]);
+
+  // Оптимизированная загрузка статистики станций
+  const loadStationsMap = useCallback(async (force = false) => {
+    if (isInBackgroundRef.current && !force) return;
+    
+    try {
+      console.log('🗺️ Загрузка статистики станций для города:', selectedCity);
+      
+      // Проверяем кэш
+      const cacheKey = `stations_${selectedCity}_${Date.now() % 60000}`; // Ключ обновляется раз в минуту
+      const cached = apiCacheRef.current.get(cacheKey);
+      
+      if (!force && cached) {
+        console.log('📦 Используем кэшированные данные станций');
+        setStationsData(cached);
+        return cached;
+      }
+      
+      // Получаем всех пользователей
+      const users = await safeApiCall(api.getUsers);
+      
+      // Рассчитываем статистику локально
+      const stats = calculateStationsStats(users, selectedCity);
+      
+      // Кэшируем результат
+      apiCacheRef.current.set(cacheKey, stats);
+      
+      // Обновляем состояние
+      setStationsData(stats);
+      
+      // Также обновляем allUsers
+      const activeUsers = users.filter(user => user.online === true);
+      setAllUsers(activeUsers);
+      setUsersCache(activeUsers);
+      setCacheTimestamp(Date.now());
+      
+      console.log('✅ Статистика загружена:', {
+        stations: stats.stationStats.length,
+        connected: stats.totalStats.total_connected,
+        waiting: stats.totalStats.total_waiting,
+        total: stats.totalStats.total_users
+      });
+      
+      return stats;
+    } catch (error) {
+      console.error('❌ Ошибка загрузки карты станций:', error);
+      const emptyStats = {
+        stationStats: [],
+        totalStats: { total_connected: 0, total_waiting: 0, total_users: 0 }
+      };
+      setStationsData(emptyStats);
+      return emptyStats;
+    }
+  }, [selectedCity, safeApiCall]);
+
+  // Оптимизированная загрузка участников группы
+  const loadGroupMembers = useCallback(async (station = null) => {
+    const targetStation = station || (currentGroup ? currentGroup.station : null);
+    
+    if (!targetStation) {
+      setGroupMembers([]);
+      return;
+    }
+    
+    if (isInBackgroundRef.current) return;
+    
+    try {
+      // Проверяем кэш
+      const cacheKey = `group_${targetStation}_${Date.now() % 30000}`; // Ключ обновляется раз в 30 секунд
+      const cached = apiCacheRef.current.get(cacheKey);
+      
+      if (cached) {
+        setGroupMembers(cached);
+        return cached;
+      }
+      
+      const users = await safeApiCall(api.getUsers);
+      
+      // Фильтруем пользователей на станции
+      const groupUsers = users.filter(user => {
+        const isOnStation = user.station === targetStation && user.is_connected === true;
+        
+        // Если это текущий пользователь, проверяем его статус
+        if (userIdRef.current && user.id === userIdRef.current) {
+          return isOnStation && user.online === true;
+        }
+        
+        return isOnStation && user.online === true;
+      });
+      
+      console.log(`👥 Загружено участников группы для станции ${targetStation}:`, groupUsers.length);
+      
+      // Кэшируем результат
+      apiCacheRef.current.set(cacheKey, groupUsers);
+      
+      setGroupMembers(groupUsers);
+      return groupUsers;
+    } catch (error) {
+      console.error('Ошибка загрузки участников группы:', error);
+      setGroupMembers([]);
+      return [];
+    }
+  }, [currentGroup, safeApiCall]);
+
+  // Оптимизированная загрузка всех пользователей
+  const loadRequests = useCallback(async (forceRefresh = false) => {
+    const now = Date.now();
+    
+    if (!forceRefresh && usersCache && (now - cacheTimestamp) < CACHE_DURATION) {
+      setAllUsers(usersCache);
+      return usersCache;
+    }
+    
+    if (isInBackgroundRef.current && !forceRefresh) return usersCache || [];
+    
+    try {
+      const users = await safeApiCall(api.getUsers);
+      const activeUsers = users.filter(user => user.online === true);
+      setAllUsers(activeUsers);
+      setUsersCache(activeUsers);
+      setCacheTimestamp(now);
+      return activeUsers;
+    } catch (error) {
+      console.error('Ошибка загрузки запросов:', error);
+      return usersCache || [];
+    }
+  }, [usersCache, cacheTimestamp, CACHE_DURATION, safeApiCall]);
+
+  // Оптимизированное восстановление сессии
+  const restoreSession = useCallback(async () => {
+    if (sessionRestoreInProgressRef.current) {
+      console.log('🔄 Восстановление сессии уже выполняется, пропускаем');
+      return;
+    }
+    
+    sessionRestoreInProgressRef.current = true;
+    setIsSessionRestoring(true);
+    setRestoreAttempted(true);
+    
+    try {
+      console.log('🔄 Начинаем восстановление сессии...');
+      
+      // Пытаемся загрузить сохраненное состояние из VK Storage
+      const savedState = await loadSessionState();
+      
+      if (savedState) {
+        console.log('📂 Используем сохраненное состояние сессии из VK Storage');
+        
+        // Восстанавливаем состояние из сохраненных данных
+        await restoreFromSavedState(savedState);
+      } else {
+        console.log('🆕 Нет сохраненного состояния, начинаем с сервера');
+        
+        // Пытаемся восстановить с сервера
+        await checkAndRestoreSession();
+      }
+    } catch (error) {
+      console.error('❌ Критическая ошибка восстановления сессии:', error);
+      setCurrentScreen('setup');
+      showNotification('Ошибка восстановления сессии', 'error');
+    } finally {
+      setIsSessionRestoring(false);
+      sessionRestoreInProgressRef.current = false;
+      setIsColdStart(false);
+    }
+  }, []);
+
+  // Оптимизированное восстановление из сохраненного состояния
+  const restoreFromSavedState = useCallback(async (savedState) => {
     try {
       console.log('🔄 Восстанавливаем из сохраненного состояния:', savedState);
       
@@ -785,10 +863,323 @@ export const App = () => {
       console.error('❌ Ошибка восстановления из сохраненного состояния:', error);
       setCurrentScreen('setup');
     }
-  };
+  }, [safeApiCall, loadStationsMap, loadGroupMembers, loadRequests]);
+
+  // Оптимизированное обновление состояния пользователя
+  const updateUserState = useCallback(async () => {
+    if (!userIdRef.current) return;
+    
+    queueUpdate(async () => {
+      try {
+        const newStatus = generateUserStatus();
+        const currentDeviceId = deviceId || await generateDeviceId();
+        
+        await safeApiCall(api.updateUser, userIdRef.current, { 
+          status: newStatus,
+          position: selectedPosition,
+          mood: selectedMood,
+          session_id: sessionIdRef.current,
+          device_id: currentDeviceId,
+          last_seen: new Date().toISOString()
+        });
+        
+        // Обновляем локальное состояние группы
+        setGroupMembers(prevMembers => 
+          prevMembers.map(member => 
+            member.id === userIdRef.current 
+              ? { 
+                  ...member, 
+                  status: newStatus,
+                  position: selectedPosition,
+                  mood: selectedMood
+                }
+              : member
+          )
+        );
+        
+        // Очищаем кэш группы
+        apiCacheRef.current.clearByPrefix('group_');
+        await loadGroupMembers();
+      } catch (error) {
+        console.error('❌ Ошибка обновления состояния:', error);
+      }
+    });
+  }, [selectedPosition, selectedMood, deviceId, safeApiCall, queueUpdate, loadGroupMembers]);
+
+  // Генерация статуса пользователя
+  const generateUserStatus = useCallback(() => {
+    const positionPart = selectedPosition ? selectedPosition : '';
+    const moodPart = selectedMood ? selectedMood : '';
+    
+    if (positionPart && moodPart) {
+      return `${positionPart} | ${moodPart}`;
+    } else if (positionPart || moodPart) {
+      return positionPart || moodPart;
+    } else {
+      return 'Ожидание';
+    }
+  }, [selectedPosition, selectedMood]);
+
+  // Оптимизированный обработчик видимости
+  const handleVisibilityChange = useCallback(() => {
+    clearTimeout(visibilityTimeoutRef.current);
+    
+    if (document.hidden) {
+      console.log('📱 Приложение ушло в фон');
+      isInBackgroundRef.current = true;
+      setAppState('background');
+      
+      // Откладываем пинг в фоне
+      visibilityTimeoutRef.current = setTimeout(() => {
+        if (userIdRef.current) {
+          improvedPingActivity();
+        }
+      }, 15000); // 15 секунд задержки
+    } else {
+      console.log('📱 Приложение активно');
+      isInBackgroundRef.current = false;
+      setAppState('active');
+      
+      // При возвращении на передний план - отправляем пинг и обновляем данные
+      if (userIdRef.current) {
+        improvedPingActivity();
+        
+        // Обновляем данные с небольшой задержкой
+        setTimeout(() => {
+          if (currentScreen === 'waiting') {
+            loadStationsMap(true);
+          } else if (currentScreen === 'joined' && currentGroup) {
+            loadGroupMembers(currentGroup.station);
+          }
+        }, 1000);
+      }
+    }
+  }, [currentScreen, currentGroup, improvedPingActivity, loadStationsMap, loadGroupMembers]);
+
+  // Оптимизированный обработчик онлайн/оффлайн статуса
+  const handleNetworkStatusChange = useCallback(() => {
+    const online = navigator.onLine;
+    setIsOnline(online);
+    
+    if (online) {
+      console.log('🌐 Интернет восстановлен');
+      
+      // Если был в joined, восстанавливаем сессию
+      if (userIdRef.current && (currentScreen === 'joined' || currentScreen === 'waiting')) {
+        queueUpdate(async () => {
+          try {
+            const currentDeviceId = deviceId || await generateDeviceId();
+            await setUserOnline(userIdRef.current, sessionIdRef.current, currentDeviceId);
+            console.log('✅ Сессия восстановлена после потери соединения');
+            
+            // Очищаем кэш и обновляем данные
+            apiCacheRef.current.clear();
+            
+            if (currentScreen === 'joined') {
+              await loadGroupMembers();
+              await loadRequests(true);
+            } else if (currentScreen === 'waiting') {
+              await loadStationsMap(true);
+              await loadRequests();
+            }
+          } catch (error) {
+            console.error('❌ Ошибка восстановления сессии:', error);
+          }
+        });
+      }
+    } else {
+      console.log('🌐 Потеряно интернет-соединение');
+      setNotificationText('⚠️ Потеряно соединение с интернетом');
+    }
+  }, [currentScreen, deviceId, queueUpdate, loadGroupMembers, loadRequests, loadStationsMap]);
+
+  // Основная инициализация приложения
+  useEffect(() => {
+    console.log('✅ React компонент App загружен');
+    
+    // Инициализация устройства
+    const initializeDevice = async () => {
+      try {
+        const generatedDeviceId = await generateDeviceId();
+        setDeviceId(generatedDeviceId);
+        console.log('📱 Идентификатор устройства:', generatedDeviceId);
+      } catch (error) {
+        console.error('❌ Ошибка инициализации устройства:', error);
+        const fallbackDeviceId = 'device_' + Math.random().toString(36).substr(2, 9);
+        setDeviceId(fallbackDeviceId);
+      }
+    };
+    
+    initializeDevice();
+    
+    // Инициализация VK Bridge
+    bridge.send("VKWebAppInit")
+      .then((data) => {
+        if (data.result) {
+          console.log('✅ VK Bridge инициализирован');
+        } else {
+          console.error('❌ Ошибка инициализации VK Bridge');
+        }
+      })
+      .catch((error) => {
+        console.error('❌ Ошибка инициализации VK Bridge:', error);
+      });
+
+    // Загрузка данных пользователя VK
+    async function fetchUserData() {
+      try {
+        const user = await bridge.send('VKWebAppGetUserInfo');
+        setUser(user);
+        vkUserIdRef.current = user.id;
+        console.log('👤 Данные пользователя VK загружены:', user.id);
+      } catch (error) {
+        console.error('❌ Ошибка загрузки пользователя:', error);
+      }
+    }
+    
+    fetchUserData();
+    
+    // Восстановление сессии пользователя
+    setTimeout(() => {
+      restoreSession();
+    }, 500); // Задержка для первоначальной загрузки
+    
+    // Подписка на события видимости страницы
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    // Подписка на события сети
+    window.addEventListener('online', handleNetworkStatusChange);
+    window.addEventListener('offline', handleNetworkStatusChange);
+    
+    // Подписка на события VK Bridge
+    const bridgeUnsubscribe = bridge.subscribe((event) => {
+      if (!event.detail) return;
+      
+      const { type, data } = event.detail;
+      
+      switch (type) {
+        case 'VKWebAppUpdateConfig':
+          const schemeAttribute = document.createAttribute('scheme');
+          schemeAttribute.value = data.scheme ? data.scheme : 'client_light';
+          document.body.attributes.setNamedItem(schemeAttribute);
+          break;
+        case 'VKWebAppViewHide':
+          console.log('📱 VKWebAppViewHide - приложение скрыто');
+          isInBackgroundRef.current = true;
+          setAppState('background');
+          break;
+        case 'VKWebAppViewRestore':
+          console.log('📱 VKWebAppViewRestore - приложение восстановлено');
+          isInBackgroundRef.current = false;
+          setAppState('active');
+          // При восстановлении обновляем статус
+          if (userIdRef.current) {
+            improvedPingActivity();
+          }
+          break;
+        default:
+          break;
+      }
+    });
+    
+    // Запуск глобального обновления с увеличенным интервалом
+    const cleanupGlobalRefresh = startGlobalRefresh();
+
+    // Запуск периодического пинга
+    const startPeriodicPing = () => {
+      return setInterval(async () => {
+        if (userIdRef.current && !isInBackgroundRef.current) {
+          await improvedPingActivity();
+        }
+      }, PING_INTERVAL);
+    };
+
+    const pingInterval = startPeriodicPing();
+
+    // Периодическое обновление данных
+    const startDataRefresh = () => {
+      return setInterval(() => {
+        if (isInBackgroundRef.current) return;
+        
+        clearTimeout(dataRefreshTimeoutRef.current);
+        dataRefreshTimeoutRef.current = setTimeout(() => {
+          if (currentScreen === 'waiting') {
+            loadStationsMap();
+          } else if (currentScreen === 'joined' && currentGroup) {
+            loadGroupMembers(currentGroup.station);
+          }
+        }, 2000); // Задержка для батчинга
+      }, 30000); // Каждые 30 секунд
+    };
+
+    const dataRefreshInterval = startDataRefresh();
+
+    // Очистка при размонтировании
+    return () => {
+      console.log('🧹 Очистка компонента');
+      
+      // Удаляем обработчики событий
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('online', handleNetworkStatusChange);
+      window.removeEventListener('offline', handleNetworkStatusChange);
+      
+      // Отписываемся от событий VK Bridge
+      if (bridgeUnsubscribe) {
+        bridgeUnsubscribe();
+      }
+      
+      // Очищаем все таймеры и интервалы
+      clearTimeout(visibilityTimeoutRef.current);
+      clearTimeout(dataRefreshTimeoutRef.current);
+      clearTimeout(batchUpdateTimeoutRef.current);
+      clearInterval(pingInterval);
+      clearInterval(dataRefreshInterval);
+      
+      if (pingTimeoutRef.current) {
+        clearTimeout(pingTimeoutRef.current);
+      }
+      if (backgroundPingIntervalRef.current) {
+        clearInterval(backgroundPingIntervalRef.current);
+      }
+      if (globalRefreshIntervalRef.current) {
+        clearInterval(globalRefreshIntervalRef.current);
+      }
+      
+      // Отменяем текущие запросы
+      abortControllerRef.current.abort();
+      
+      // Устанавливаем пользователя в оффлайн только если это реальное закрытие
+      if (isAppClosingRef.current && userIdRef.current) {
+        const currentDeviceId = deviceId || 'device_' + Math.random().toString(36).substr(2, 9);
+        setUserOffline(userIdRef.current, sessionIdRef.current, currentDeviceId);
+      }
+      
+      cleanupGlobalRefresh();
+    };
+  }, [restoreSession, handleVisibilityChange, handleNetworkStatusChange, improvedPingActivity, loadStationsMap, loadGroupMembers, currentScreen, currentGroup, deviceId]);
+
+  // Запуск глобального обновления
+  const startGlobalRefresh = useCallback(() => {
+    const interval = setInterval(async () => {
+      try {
+        if (currentScreen === 'waiting') {
+          await loadStationsMap();
+          await loadRequests();
+        } else if (currentScreen === 'joined' && currentGroup) {
+          await loadGroupMembers(currentGroup.station);
+          await loadRequests();
+        }
+      } catch (error) {
+        console.error('❌ Ошибка глобального обновления:', error);
+      }
+    }, 120000); // Увеличиваем интервал до 120 секунд (2 минуты)
+    
+    globalRefreshIntervalRef.current = interval;
+    return () => clearInterval(interval);
+  }, [currentScreen, currentGroup, loadStationsMap, loadRequests, loadGroupMembers]);
 
   // Проверка и восстановление сессии с сервера
-  const checkAndRestoreSession = async () => {
+  const checkAndRestoreSession = useCallback(async () => {
     try {
       const currentDeviceId = await generateDeviceId();
       console.log('🔍 Ищем активные сессии для устройства:', currentDeviceId);
@@ -860,10 +1251,10 @@ export const App = () => {
       console.error('❌ Ошибка проверки сессии:', error);
       setCurrentScreen('setup');
     }
-  };
+  }, [safeApiCall]);
 
   // Восстановление сессии пользователя
-  const restoreUserSession = async (userData) => {
+  const restoreUserSession = useCallback(async (userData) => {
     try {
       console.log('🔄 Восстанавливаем состояние пользователя:', userData);
       
@@ -922,142 +1313,7 @@ export const App = () => {
       console.error('❌ Ошибка восстановления сессии:', error);
       setCurrentScreen('setup');
     }
-  };
-
-  // Загрузка статистики станций
-  const loadStationsMap = async () => {
-    try {
-      console.log('🗺️ Загрузка статистики станций для города:', selectedCity);
-      
-      // Получаем всех пользователей
-      const users = await safeApiCall(api.getUsers);
-      
-      // Рассчитываем статистику локально
-      const stats = calculateStationsStats(users, selectedCity);
-      
-      // Обновляем состояние
-      setStationsData(stats);
-      
-      // Также обновляем allUsers
-      const activeUsers = users.filter(user => user.online === true);
-      setAllUsers(activeUsers);
-      setUsersCache(activeUsers);
-      setCacheTimestamp(Date.now());
-      
-      console.log('✅ Статистика загружена:', {
-        stations: stats.stationStats.length,
-        connected: stats.totalStats.total_connected,
-        waiting: stats.totalStats.total_waiting,
-        total: stats.totalStats.total_users
-      });
-      
-      return stats;
-    } catch (error) {
-      console.error('❌ Ошибка загрузки карты станций:', error);
-      const emptyStats = {
-        stationStats: [],
-        totalStats: { total_connected: 0, total_waiting: 0, total_users: 0 }
-      };
-      setStationsData(emptyStats);
-      return emptyStats;
-    }
-  };
-
-  // Загрузка участников группы
-  const loadGroupMembers = async (station = null) => {
-    const targetStation = station || (currentGroup ? currentGroup.station : null);
-    
-    if (!targetStation) {
-      setGroupMembers([]);
-      return;
-    }
-    
-    try {
-      const users = await safeApiCall(api.getUsers);
-      
-      // Фильтруем пользователей на станции
-      const groupUsers = users.filter(user => {
-        const isOnStation = user.station === targetStation && user.is_connected === true;
-        
-        // Если это текущий пользователь, проверяем его статус
-        if (userIdRef.current && user.id === userIdRef.current) {
-          return isOnStation && user.online === true;
-        }
-        
-        return isOnStation && user.online === true;
-      });
-      
-      console.log(`👥 Загружено участников группы для станции ${targetStation}:`, groupUsers.length);
-      setGroupMembers(groupUsers);
-    } catch (error) {
-      console.error('Ошибка загрузки участников группы:', error);
-      setGroupMembers([]);
-    }
-  };
-
-  // Загрузка всех пользователей
-  const loadRequests = async (forceRefresh = false) => {
-    const now = Date.now();
-    
-    if (!forceRefresh && usersCache && (now - cacheTimestamp) < CACHE_DURATION) {
-      setAllUsers(usersCache);
-      return usersCache;
-    }
-    
-    try {
-      const users = await safeApiCall(api.getUsers);
-      const activeUsers = users.filter(user => user.online === true);
-      setAllUsers(activeUsers);
-      setUsersCache(activeUsers);
-      setCacheTimestamp(now);
-      return activeUsers;
-    } catch (error) {
-      console.error('Ошибка загрузки запросов:', error);
-      return usersCache || [];
-    }
-  };
-
-  // Обработка онлайн/офлайн статуса
-  useEffect(() => {
-    const handleOnline = async () => {
-      console.log('🌐 Интернет восстановлен');
-      setIsOnline(true);
-      
-      // Если был в joined, восстанавливаем сессию
-      if (userIdRef.current && (currentScreen === 'joined' || currentScreen === 'waiting')) {
-        try {
-          const currentDeviceId = await generateDeviceId();
-          await setUserOnline(userIdRef.current, sessionIdRef.current, currentDeviceId);
-          console.log('✅ Сессия восстановлена после потери соединения');
-          
-          // Обновляем данные
-          if (currentScreen === 'joined') {
-            await loadGroupMembers();
-            await loadRequests(true);
-          } else if (currentScreen === 'waiting') {
-            await loadStationsMap();
-            await loadRequests();
-          }
-        } catch (error) {
-          console.error('❌ Ошибка восстановления сессии:', error);
-        }
-      }
-    };
-    
-    const handleOffline = () => {
-      console.log('🌐 Потеряно интернет-соединение');
-      setIsOnline(false);
-      setNotificationText('⚠️ Потеряно соединение с интернетом');
-    };
-    
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, [currentScreen, currentGroup, deviceId]);
+  }, [loadStationsMap, loadGroupMembers]);
 
   // Сохранение состояний в VK Storage при изменениях
   useEffect(() => {
@@ -1102,13 +1358,13 @@ export const App = () => {
     // Добавляем задержку для предотвращения частых сохранений
     const timeoutId = setTimeout(() => {
       saveSettings();
-    }, 3000);
+    }, 5000); // Увеличиваем задержку до 5 секунд
     
     return () => clearTimeout(timeoutId);
   }, [
     selectedCity, selectedGender, selectedPosition, selectedMood,
     currentSelectedStation, selectedMinutes, nickname, clothingColor,
-    wagonNumber, currentScreen, currentGroup
+    wagonNumber, currentScreen, currentGroup, isColdStart
   ]);
 
   // Автоматическое обновление статуса при изменении позиции или настроения
@@ -1116,14 +1372,14 @@ export const App = () => {
     if (userIdRef.current && (selectedPosition || selectedMood)) {
       const timeoutId = setTimeout(() => {
         updateUserState();
-      }, 5000); // Увеличиваем задержку до 5 секунд
+      }, 3000); // Уменьшаем задержку до 3 секунд
       
       return () => clearTimeout(timeoutId);
     }
-  }, [selectedPosition, selectedMood]);
+  }, [selectedPosition, selectedMood, updateUserState]);
 
   // Валидация никнейма
-  const validateNickname = () => {
+  const validateNickname = useCallback(() => {
     const trimmedNickname = nickname.trim();
     if (!trimmedNickname) {
       setNicknameError(true);
@@ -1133,10 +1389,10 @@ export const App = () => {
     
     setNicknameError(false);
     return true;
-  };
+  }, [nickname]);
 
   // Валидация цвета одежды
-  const validateClothingColor = () => {
+  const validateClothingColor = useCallback(() => {
     const trimmedColor = clothingColor.trim();
     if (!trimmedColor) {
       setClothingColorError(true);
@@ -1146,10 +1402,10 @@ export const App = () => {
     
     setClothingColorError(false);
     return true;
-  };
+  }, [clothingColor]);
 
   // Валидация выбора станции
-  const validateStation = () => {
+  const validateStation = useCallback(() => {
     if (!currentSelectedStation) {
       setStationError(true);
       showNotification('Пожалуйста, выберите станцию на карте', 'error');
@@ -1158,31 +1414,31 @@ export const App = () => {
     
     setStationError(false);
     return true;
-  };
+  }, [currentSelectedStation]);
 
   // Сброс ошибки при изменении никнейма
-  const handleNicknameChange = (e) => {
+  const handleNicknameChange = useCallback((e) => {
     setNickname(e.target.value);
     if (nicknameError) {
       setNicknameError(false);
     }
-  };
+  }, [nicknameError]);
 
   // Сброс ошибки при изменении цвета одежды
-  const handleClothingColorChange = (e) => {
+  const handleClothingColorChange = useCallback((e) => {
     setClothingColor(e.target.value);
     if (clothingColorError) {
       setClothingColorError(false);
     }
-  };
+  }, [clothingColorError]);
 
   // Сброс ошибки при выборе станции
-  const handleStationSelect = (stationName) => {
+  const handleStationSelect = useCallback((stationName) => {
     setCurrentSelectedStation(stationName);
     if (stationError) {
       setStationError(false);
     }
-  };
+  }, [stationError]);
 
   // Вход в комнату ожидания с валидацией
   const handleEnterWaitingRoom = async () => {
@@ -1339,6 +1595,9 @@ export const App = () => {
       // Показываем успешное уведомление
       showNotification(`Вы присоединились к станции ${currentSelectedStation}`, 'success');
       
+      // Очищаем кэш
+      apiCacheRef.current.clear();
+      
       // Загружаем участников группы
       setTimeout(() => {
         loadGroupMembers(currentSelectedStation);
@@ -1392,124 +1651,41 @@ export const App = () => {
     setSelectedPosition('');
     setSelectedMood('');
     
+    // Очищаем кэш
+    apiCacheRef.current.clear();
+    
     // Показываем уведомление
     showNotification('Вы вышли из комнаты станции', 'info');
   };
 
-  // Генерация статуса пользователя
-  const generateUserStatus = () => {
-    const positionPart = selectedPosition ? selectedPosition : '';
-    const moodPart = selectedMood ? selectedMood : '';
-    
-    if (positionPart && moodPart) {
-      return `${positionPart} | ${moodPart}`;
-    } else if (positionPart || moodPart) {
-      return positionPart || moodPart;
-    } else {
-      return 'Ожидание';
-    }
-  };
-
   // Обработчики выбора
-  const handleCitySelect = (city) => setSelectedCity(city);
-  const handleGenderSelect = (gender) => setSelectedGender(gender);
-  const handlePositionSelect = (position) => {
+  const handleCitySelect = useCallback((city) => setSelectedCity(city), []);
+  const handleGenderSelect = useCallback((gender) => setSelectedGender(gender), []);
+  const handlePositionSelect = useCallback((position) => {
     const previousPosition = selectedPosition;
     setSelectedPosition(position);
     
     if (previousPosition !== position) {
       updateUserState();
     }
-  };
+  }, [selectedPosition, updateUserState]);
 
-  const handleMoodSelect = (mood) => {
+  const handleMoodSelect = useCallback((mood) => {
     const previousMood = selectedMood;
     setSelectedMood(mood);
     
     if (previousMood !== mood) {
       updateUserState();
     }
-  };
+  }, [selectedMood, updateUserState]);
 
-  const handleTimerSelect = (minutes) => {
+  const handleTimerSelect = useCallback((minutes) => {
     setSelectedMinutes(minutes);
-  };
-
-  // Обновление состояния пользователя
-  const updateUserState = async () => {
-    if (!userIdRef.current) return;
-    
-    try {
-      const newStatus = generateUserStatus();
-      const currentDeviceId = await generateDeviceId();
-      
-      await safeApiCall(api.updateUser, userIdRef.current, { 
-        status: newStatus,
-        position: selectedPosition,
-        mood: selectedMood,
-        session_id: sessionIdRef.current,
-        device_id: currentDeviceId,
-        last_seen: new Date().toISOString()
-      });
-      
-      // Обновляем локальное состояние группы
-      setGroupMembers(prevMembers => 
-        prevMembers.map(member => 
-          member.id === userIdRef.current 
-            ? { 
-                ...member, 
-                status: newStatus,
-                position: selectedPosition,
-                mood: selectedMood
-              }
-            : member
-        )
-      );
-      
-      await loadGroupMembers();
-    } catch (error) {
-      console.error('❌ Ошибка обновления состояния:', error);
-    }
-  };
-
-  // Пинг активности
-  const improvedPingActivity = async () => {
-    if (!userIdRef.current) return false;
-    
-    const now = Date.now();
-    if (now - lastPingTime < 30000) return false; // Не пингуем чаще чем раз в 30 секунд
-    
-    try {
-      const currentDeviceId = await generateDeviceId();
-      
-      const updateData = { 
-        online: true,
-        is_connected: currentScreen === 'joined',
-        session_id: sessionIdRef.current,
-        device_id: currentDeviceId,
-        last_seen: new Date().toISOString(),
-        ...(currentScreen === 'joined' && currentGroup && { 
-          station: currentGroup.station 
-        })
-      };
-      
-      await safeApiCall(api.pingActivity, userIdRef.current, updateData);
-      setLastPingTime(now);
-      
-      if (currentScreen === 'joined') {
-        await loadGroupMembers();
-      }
-      
-      return true;
-    } catch (error) {
-      console.error('Ошибка пинга активности:', error);
-      return false;
-    }
-  };
+  }, []);
 
   // Навигация
-  const showSetup = () => setCurrentScreen('setup');
-  const showWaitingRoom = () => {
+  const showSetup = useCallback(() => setCurrentScreen('setup'), []);
+  const showWaitingRoom = useCallback(() => {
     if (!userIdRef.current) {
       if (!validateNickname()) {
         return;
@@ -1518,18 +1694,18 @@ export const App = () => {
       return;
     }
     setCurrentScreen('waiting');
-  };
+  }, [validateNickname]);
 
-  const showJoinedRoom = () => {
+  const showJoinedRoom = useCallback(() => {
     if (!currentGroup) {
       showNotification('Сначала выберите станцию', 'info');
       return;
     }
     setCurrentScreen('joined');
-  };
+  }, [currentGroup]);
 
-  // Рендер карты станций
-  const renderStationsMap = () => {
+  // Мемоизированный рендер карты станций
+  const renderStationsMap = useMemo(() => {
     const { stationStats } = stationsData;
     
     if (!stationStats || stationStats.length === 0) {
@@ -1572,7 +1748,14 @@ export const App = () => {
       const totalCount = waitingCount + connectedCount;
       const isSelected = currentSelectedStation === stationName;
       
-      return (
+      // Мемоизация станций
+      const stationKey = `${stationName}_${waitingCount}_${connectedCount}_${isSelected}`;
+      
+      if (memoizedStationsRef.current.has(stationKey)) {
+        return memoizedStationsRef.current.get(stationKey);
+      }
+      
+      const stationElement = (
         <div 
           key={stationName}
           className={`station-map-item ${stationClass} ${isSelected ? 'selected' : ''}`}
@@ -1589,11 +1772,14 @@ export const App = () => {
           )}
         </div>
       );
+      
+      memoizedStationsRef.current.set(stationKey, stationElement);
+      return stationElement;
     });
-  };
+  }, [stationsData, selectedCity, currentSelectedStation, handleStationSelect]);
 
-  // Рендер участников группы
-  const renderGroupMembers = () => {
+  // Мемоизированный рендер участников группы
+  const renderGroupMembers = useMemo(() => {
     if (groupMembers.length === 0) {
       return <div className="no-requests">Нет участников на этой станции</div>;
     }
@@ -1636,7 +1822,7 @@ export const App = () => {
         </div>
       );
     });
-  };
+  }, [groupMembers]);
 
   // Отображение информации о сессии
   const renderSessionInfo = () => {
@@ -1865,7 +2051,7 @@ export const App = () => {
                   className="metro-map" 
                   id="metro-map"
                 >
-                  {renderStationsMap()}
+                  {renderStationsMap}
                 </div>
                 
                 {stationError && (
@@ -2040,7 +2226,7 @@ export const App = () => {
               <div className="users-list-section">
                 <h3>👥 Участники на вашей станции</h3>
                 <div id="group-members">
-                  {renderGroupMembers()}
+                  {renderGroupMembers}
                 </div>
               </div>
               
