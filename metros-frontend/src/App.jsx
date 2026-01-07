@@ -1427,31 +1427,6 @@ export const App = () => {
     });
   };
 
-  // Выход из приложения с установкой оффлайн
-  const handleExitApp = async () => {
-    if (userIdRef.current) {
-      try {
-        await setUserOffline(userIdRef.current, sessionIdRef.current, deviceId);
-        console.log('✅ Пользователь установлен в оффлайн');
-        
-        // Очищаем сохраненное состояние
-        clearSessionState();
-      } catch (error) {
-        console.error('Ошибка при установке оффлайн:', error);
-      }
-    }
-    
-    setCurrentScreen('setup');
-    setCurrentGroup(null);
-    setSelectedPosition('');
-    setSelectedMood('');
-    
-    // Показываем уведомление
-    bridge.send("VKWebAppShowSnackbar", {
-      text: 'Вы вышли из приложения'
-    });
-  };
-
   // Генерация статуса пользователя
   const generateUserStatus = () => {
     const positionPart = selectedPosition ? selectedPosition : '';
@@ -1805,24 +1780,6 @@ export const App = () => {
             </div>
             <div className="header-icons">
               <div className="metro-icon">🚇</div>
-              {userIdRef.current && (
-                <button 
-                  className="exit-app-btn"
-                  onClick={handleExitApp}
-                  style={{
-                    fontSize: '12px',
-                    padding: '5px 10px',
-                    backgroundColor: '#dc3545',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '5px',
-                    cursor: 'pointer',
-                    marginLeft: '10px'
-                  }}
-                >
-                  Выйти
-                </button>
-              )}
             </div>
           </div>
         </header>
@@ -2164,14 +2121,9 @@ export const App = () => {
                 </div>
               </div>
               
-              <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
-                <button className="btn btn-danger" onClick={handleLeaveGroup}>
-                  Покинуть группу
-                </button>
-                <button className="btn btn-warning" onClick={handleExitApp}>
-                  Выйти из приложения
-                </button>
-              </div>
+              <button className="btn btn-danger" onClick={handleLeaveGroup}>
+                Покинуть группу
+              </button>
             </div>
           )}
         </div>
