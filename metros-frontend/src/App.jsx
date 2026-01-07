@@ -84,9 +84,12 @@ const setUserOffline = async (userId, sessionId, deviceId) => {
     console.log('👋 Устанавливаем пользователя в оффлайн:', userId);
     await api.updateUser(userId, { 
       online: false,
+      is_connected: false,
+      is_waiting: false,
       last_seen: new Date().toISOString(),
       session_id: sessionId,
-      device_id: deviceId
+      device_id: deviceId,
+      status: 'Оффлайн'
     });
     console.log('✅ Пользователь успешно установлен в оффлайн');
   } catch (error) {
@@ -191,6 +194,7 @@ export const App = () => {
   const [usersCache, setUsersCache] = useState(null);
   const [cacheTimestamp, setCacheTimestamp] = useState(0);
   const [lastPingTime, setLastPingTime] = useState(0);
+  const [lastActivityTime, setLastActivityTime] = useState(Date.now());
   const [isLoading, setIsLoading] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   const [deviceId, setDeviceId] = useState('');
@@ -200,10 +204,12 @@ export const App = () => {
   const [stationError, setStationError] = useState(false);
   const [restoreAttempted, setRestoreAttempted] = useState(false);
   const [isColdStart, setIsColdStart] = useState(true);
+  const [inactivityTimer, setInactivityTimer] = useState(30 * 60 * 1000); // 30 минут по умолчанию
   
   const CACHE_DURATION = 10000;
   const PING_INTERVAL = 15000;
-  const OFFLINE_TIMEOUT = 10000; // 10 секунд перед установкой оффлайн
+  const INACTIVITY_TIMEOUT = 30 * 60 * 1000; // 30 минут бездействия
+  const SHORT_INACTIVITY_TIMEOUT = 5 * 60 * 1000; // 5 минут для скрытия приложения
 
   const userIdRef = useRef(null);
   const globalRefreshIntervalRef = useRef(null);
@@ -217,8 +223,10 @@ export const App = () => {
   const appVisibilityHandlerRef = useRef(null);
   const offlineTimeoutRef = useRef(null);
   const pingTimeoutRef = useRef(null);
+  const inactivityTimeoutRef = useRef(null);
   const isOfflineRequestRef = useRef(false);
   const isAppActiveRef = useRef(true);
+  const userActivityRef = useRef(Date.now());
 
   // Основная инициализация приложения
   useEffect(() => {
@@ -250,16 +258,16 @@ export const App = () => {
         isAppActiveRef.current = false;
         setAppState('background');
         
-        // Откладываем установку в оффлайн на 10 секунд
-        if (userIdRef.current && !isOfflineRequestRef.current) {
-          clearTimeout(offlineTimeoutRef.current);
-          offlineTimeoutRef.current = setTimeout(() => {
-            if (!isAppActiveRef.current && userIdRef.current) {
-              isOfflineRequestRef.current = true;
-              setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
-            }
-          }, OFFLINE_TIMEOUT);
-        }
+        // Если приложение скрыто, запускаем таймер на 5 минут
+        clearTimeout(offlineTimeoutRef.current);
+        offlineTimeoutRef.current = setTimeout(() => {
+          if (!isAppActiveRef.current && userIdRef.current) {
+            console.log('⏰ 5 минут неактивности, устанавливаем в оффлайн');
+            isOfflineRequestRef.current = true;
+            setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
+          }
+        }, SHORT_INACTIVITY_TIMEOUT);
+        
       } else {
         console.log('📱 Приложение активно');
         isAppActiveRef.current = true;
@@ -277,6 +285,23 @@ export const App = () => {
         }
       }
     };
+
+    // Таймер неактивности (30 минут)
+    const checkInactivity = () => {
+      const now = Date.now();
+      const timeSinceLastActivity = now - userActivityRef.current;
+      
+      if (timeSinceLastActivity > INACTIVITY_TIMEOUT && userIdRef.current && isAppActiveRef.current) {
+        console.log('⏰ 30 минут неактивности, устанавливаем в оффлайн');
+        setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
+      } else {
+        // Повторяем проверку каждую минуту
+        inactivityTimeoutRef.current = setTimeout(checkInactivity, 60000);
+      }
+    };
+
+    // Запускаем таймер неактивности
+    inactivityTimeoutRef.current = setTimeout(checkInactivity, 60000);
 
     // Подписка на события видимости страницы
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -300,16 +325,15 @@ export const App = () => {
           setAppState('background');
           isAppActiveRef.current = false;
           
-          // Откладываем установку в оффлайн
-          if (userIdRef.current && !isOfflineRequestRef.current) {
-            clearTimeout(offlineTimeoutRef.current);
-            offlineTimeoutRef.current = setTimeout(() => {
-              if (!isAppActiveRef.current && userIdRef.current) {
-                isOfflineRequestRef.current = true;
-                setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
-              }
-            }, OFFLINE_TIMEOUT);
-          }
+          // Если приложение скрыто, запускаем таймер на 5 минут
+          clearTimeout(offlineTimeoutRef.current);
+          offlineTimeoutRef.current = setTimeout(() => {
+            if (!isAppActiveRef.current && userIdRef.current) {
+              console.log('⏰ 5 минут неактивности, устанавливаем в оффлайн');
+              isOfflineRequestRef.current = true;
+              setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
+            }
+          }, SHORT_INACTIVITY_TIMEOUT);
           break;
         case 'VKWebAppViewRestore':
           console.log('📱 VKWebAppViewRestore - приложение восстановлено');
@@ -399,6 +423,7 @@ export const App = () => {
       // Очищаем все таймеры
       clearTimeout(offlineTimeoutRef.current);
       clearTimeout(pingTimeoutRef.current);
+      clearTimeout(inactivityTimeoutRef.current);
       
       // Удаляем обработчики событий видимости
       if (appVisibilityHandlerRef.current) {
@@ -434,11 +459,10 @@ export const App = () => {
       const users = await api.getUsers();
       const serverSession = users.find(user => 
         user.id === savedState.userId &&
-        user.device_id === deviceId &&
-        user.online === true
+        user.device_id === deviceId
       );
       
-      if (serverSession) {
+      if (serverSession && serverSession.online !== false) {
         // Сессия существует на сервере
         console.log('✅ Сессия найдена на сервере, продолжаем восстановление');
         
@@ -485,8 +509,8 @@ export const App = () => {
           setCurrentScreen('setup');
         }
       } else {
-        // Сессии нет на сервере, начинаем заново
-        console.log('❌ Сессия не найдена на сервере, начинаем заново');
+        // Сессии нет на сервере или она оффлайн, начинаем заново
+        console.log('❌ Сессия не найдена на сервере или оффлайн, начинаем заново');
         setCurrentScreen('setup');
         clearSessionState();
       }
@@ -1403,6 +1427,31 @@ export const App = () => {
     });
   };
 
+  // Выход из приложения с установкой оффлайн
+  const handleExitApp = async () => {
+    if (userIdRef.current) {
+      try {
+        await setUserOffline(userIdRef.current, sessionIdRef.current, deviceId);
+        console.log('✅ Пользователь установлен в оффлайн');
+        
+        // Очищаем сохраненное состояние
+        clearSessionState();
+      } catch (error) {
+        console.error('Ошибка при установке оффлайн:', error);
+      }
+    }
+    
+    setCurrentScreen('setup');
+    setCurrentGroup(null);
+    setSelectedPosition('');
+    setSelectedMood('');
+    
+    // Показываем уведомление
+    bridge.send("VKWebAppShowSnackbar", {
+      text: 'Вы вышли из приложения'
+    });
+  };
+
   // Генерация статуса пользователя
   const generateUserStatus = () => {
     const positionPart = selectedPosition ? selectedPosition : '';
@@ -1424,6 +1473,10 @@ export const App = () => {
     const previousPosition = selectedPosition;
     setSelectedPosition(position);
     
+    // Обновляем время активности
+    userActivityRef.current = Date.now();
+    setLastActivityTime(Date.now());
+    
     if (previousPosition !== position) {
       updateUserState();
     }
@@ -1432,6 +1485,10 @@ export const App = () => {
   const handleMoodSelect = (mood) => {
     const previousMood = selectedMood;
     setSelectedMood(mood);
+    
+    // Обновляем время активности
+    userActivityRef.current = Date.now();
+    setLastActivityTime(Date.now());
     
     if (previousMood !== mood) {
       updateUserState();
@@ -1531,12 +1588,9 @@ export const App = () => {
         
         saveSessionState(sessionState);
         
-        // Устанавливаем пользователя в оффлайн
-        try {
-          await setUserOffline(userIdRef.current, sessionIdRef.current, deviceId);
-        } catch (error) {
-          console.error('❌ Ошибка при установке оффлайн статуса:', error);
-        }
+        // НЕ устанавливаем пользователя в оффлайн при закрытии страницы
+        // чтобы сохранить сессию для восстановления
+        console.log('📱 Страница закрывается, сохраняем сессию для восстановления');
       }
     };
 
@@ -1691,6 +1745,10 @@ export const App = () => {
   // Отображение информации о сессии
   const renderSessionInfo = () => {
     if (process.env.NODE_ENV === 'development') {
+      const now = Date.now();
+      const timeSinceLastActivity = now - userActivityRef.current;
+      const minutesLeft = Math.max(0, Math.floor((INACTIVITY_TIMEOUT - timeSinceLastActivity) / 60000));
+      
       return (
         <div className="session-info" style={{
           fontSize: '10px',
@@ -1704,7 +1762,7 @@ export const App = () => {
           📱 Device: {deviceId?.substring(0, 10)}... | 
           👤 User ID: {userIdRef.current?.substring(0, 10)}... | 
           🖥️ Screen: {currentScreen} |
-          🕒 Cold Start: {isColdStart ? 'Да' : 'Нет'} |
+          🕒 До автоотключения: {minutesLeft} мин |
           📊 Stats: {stationsData.totalStats?.total_connected || 0}✅ {stationsData.totalStats?.total_waiting || 0}⏳
         </div>
       );
@@ -1747,6 +1805,24 @@ export const App = () => {
             </div>
             <div className="header-icons">
               <div className="metro-icon">🚇</div>
+              {userIdRef.current && (
+                <button 
+                  className="exit-app-btn"
+                  onClick={handleExitApp}
+                  style={{
+                    fontSize: '12px',
+                    padding: '5px 10px',
+                    backgroundColor: '#dc3545',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '5px',
+                    cursor: 'pointer',
+                    marginLeft: '10px'
+                  }}
+                >
+                  Выйти
+                </button>
+              )}
             </div>
           </div>
         </header>
@@ -2088,9 +2164,14 @@ export const App = () => {
                 </div>
               </div>
               
-              <button className="btn btn-danger" onClick={handleLeaveGroup}>
-                Покинуть группу
-              </button>
+              <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
+                <button className="btn btn-danger" onClick={handleLeaveGroup}>
+                  Покинуть группу
+                </button>
+                <button className="btn btn-warning" onClick={handleExitApp}>
+                  Выйти из приложения
+                </button>
+              </div>
             </div>
           )}
         </div>
