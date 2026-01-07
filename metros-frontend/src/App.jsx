@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import bridge from '@vkontakte/vk-bridge';
 import './App.css';
 import { api, helpers } from './services/api';
@@ -203,6 +203,7 @@ export const App = () => {
   
   const CACHE_DURATION = 10000;
   const PING_INTERVAL = 15000;
+  const OFFLINE_TIMEOUT = 10000; // 10 секунд перед установкой оффлайн
 
   const userIdRef = useRef(null);
   const globalRefreshIntervalRef = useRef(null);
@@ -214,6 +215,10 @@ export const App = () => {
   const isInitialMountRef = useRef(true);
   const sessionRestoreInProgressRef = useRef(false);
   const appVisibilityHandlerRef = useRef(null);
+  const offlineTimeoutRef = useRef(null);
+  const pingTimeoutRef = useRef(null);
+  const isOfflineRequestRef = useRef(false);
+  const isAppActiveRef = useRef(true);
 
   // Основная инициализация приложения
   useEffect(() => {
@@ -238,21 +243,33 @@ export const App = () => {
         console.error('❌ Ошибка инициализации VK Bridge:', error);
       });
 
-    // Обработчик видимости страницы
-    appVisibilityHandlerRef.current = (event) => {
-      console.log('👀 Событие видимости страницы:', event.type);
-      
-      if (document.hidden || event.type === 'blur' || event.type === 'visibilitychange') {
+    // Упрощенный обработчик видимости страницы
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
         console.log('📱 Приложение скрыто/свернуто');
+        isAppActiveRef.current = false;
         setAppState('background');
         
-        // Устанавливаем пользователя в оффлайн
-        if (userIdRef.current) {
-          setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
+        // Откладываем установку в оффлайн на 10 секунд
+        if (userIdRef.current && !isOfflineRequestRef.current) {
+          clearTimeout(offlineTimeoutRef.current);
+          offlineTimeoutRef.current = setTimeout(() => {
+            if (!isAppActiveRef.current && userIdRef.current) {
+              isOfflineRequestRef.current = true;
+              setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
+            }
+          }, OFFLINE_TIMEOUT);
         }
       } else {
         console.log('📱 Приложение активно');
+        isAppActiveRef.current = true;
         setAppState('active');
+        
+        // Очищаем таймер оффлайн
+        clearTimeout(offlineTimeoutRef.current);
+        
+        // Если был запрос на оффлайн, отменяем его
+        isOfflineRequestRef.current = false;
         
         // Восстанавливаем сессию если нужно
         if (userIdRef.current) {
@@ -262,9 +279,8 @@ export const App = () => {
     };
 
     // Подписка на события видимости страницы
-    document.addEventListener('visibilitychange', appVisibilityHandlerRef.current);
-    window.addEventListener('blur', appVisibilityHandlerRef.current);
-    window.addEventListener('focus', appVisibilityHandlerRef.current);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    appVisibilityHandlerRef.current = handleVisibilityChange;
 
     // Подписка на события VK Bridge
     bridge.subscribe((event) => {
@@ -282,14 +298,28 @@ export const App = () => {
         case 'VKWebAppViewHide':
           console.log('📱 VKWebAppViewHide - приложение скрыто');
           setAppState('background');
-          // Устанавливаем пользователя в оффлайн
-          if (userIdRef.current) {
-            setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
+          isAppActiveRef.current = false;
+          
+          // Откладываем установку в оффлайн
+          if (userIdRef.current && !isOfflineRequestRef.current) {
+            clearTimeout(offlineTimeoutRef.current);
+            offlineTimeoutRef.current = setTimeout(() => {
+              if (!isAppActiveRef.current && userIdRef.current) {
+                isOfflineRequestRef.current = true;
+                setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
+              }
+            }, OFFLINE_TIMEOUT);
           }
           break;
         case 'VKWebAppViewRestore':
           console.log('📱 VKWebAppViewRestore - приложение восстановлено');
           setAppState('active');
+          isAppActiveRef.current = true;
+          
+          // Очищаем таймер оффлайн
+          clearTimeout(offlineTimeoutRef.current);
+          isOfflineRequestRef.current = false;
+          
           // При восстановлении вида VK восстанавливаем сессию
           if (userIdRef.current) {
             improvedPingActivity();
@@ -366,15 +396,17 @@ export const App = () => {
         clearInterval(globalRefreshIntervalRef.current);
       }
       
+      // Очищаем все таймеры
+      clearTimeout(offlineTimeoutRef.current);
+      clearTimeout(pingTimeoutRef.current);
+      
       // Удаляем обработчики событий видимости
       if (appVisibilityHandlerRef.current) {
         document.removeEventListener('visibilitychange', appVisibilityHandlerRef.current);
-        window.removeEventListener('blur', appVisibilityHandlerRef.current);
-        window.removeEventListener('focus', appVisibilityHandlerRef.current);
       }
       
       // Устанавливаем пользователя в оффлайн при размонтировании
-      if (userIdRef.current) {
+      if (userIdRef.current && isAppActiveRef.current) {
         setUserOffline(userIdRef.current, sessionIdRef.current, generatedDeviceId);
       }
     };
@@ -697,7 +729,7 @@ export const App = () => {
     return () => clearInterval(interval);
   };
 
-  // Загрузка статистики станций - ИСПРАВЛЕННАЯ ВЕРСИЯ
+  // Загрузка статистики станций
   const loadStationsMap = async () => {
     try {
       console.log('🗺️ Загрузка статистики станций для города:', selectedCity);
@@ -795,7 +827,7 @@ export const App = () => {
   // Реальное обновление данных в комнате станции
   useEffect(() => {
     const realtimePollingInterval = setInterval(async () => {
-      if (currentScreen === 'joined' && currentGroup) {
+      if (currentScreen === 'joined' && currentGroup && isAppActiveRef.current) {
         try {
           // Загружаем актуальных участников
           const users = await api.getUsers();
@@ -881,7 +913,8 @@ export const App = () => {
       setIsOnline(false);
       
       // При потере соединения помечаем пользователя как оффлайн
-      if (userIdRef.current) {
+      if (userIdRef.current && !isOfflineRequestRef.current) {
+        isOfflineRequestRef.current = true;
         setUserOffline(userIdRef.current, sessionIdRef.current, deviceId);
       }
     };
@@ -1446,7 +1479,7 @@ export const App = () => {
 
   // Пинг активности
   const improvedPingActivity = async () => {
-    if (!userIdRef.current) return false;
+    if (!userIdRef.current || !isAppActiveRef.current) return false;
     
     const now = Date.now();
     if (now - lastPingTime < PING_INTERVAL) return false;
@@ -1477,13 +1510,13 @@ export const App = () => {
     }
   };
 
-  // Обработчик закрытия страницы
+  // Упрощенный обработчик закрытия страницы
   useEffect(() => {
     const handleBeforeUnload = async (event) => {
       console.log('⚠️ Страница закрывается или перезагружается');
       
       // Сохраняем текущее состояние
-      if (userIdRef.current) {
+      if (userIdRef.current && isAppActiveRef.current) {
         const sessionState = {
           userId: userIdRef.current,
           nickname,
@@ -1510,19 +1543,8 @@ export const App = () => {
     // Для современных браузеров
     window.addEventListener('beforeunload', handleBeforeUnload);
     
-    // Для мобильных устройств и VK мини-приложений
-    window.addEventListener('pagehide', handleBeforeUnload);
-    
-    // Для iOS Safari
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden && userIdRef.current) {
-        setUserOffline(userIdRef.current, sessionIdRef.current, deviceId);
-      }
-    });
-    
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      window.removeEventListener('pagehide', handleBeforeUnload);
     };
   }, [currentScreen, currentGroup, deviceId, nickname, selectedCity, selectedGender, clothingColor, wagonNumber, currentSelectedStation]);
 
@@ -1551,7 +1573,7 @@ export const App = () => {
     setCurrentScreen('joined');
   };
 
-  // Рендер карты станций - ИСПРАВЛЕННЫЙ РЕНДЕР
+  // Рендер карты станций
   const renderStationsMap = () => {
     const { stationStats } = stationsData;
     
@@ -1996,7 +2018,7 @@ export const App = () => {
                 <button className="nav-btn active">3. Комната станции</button>
               </div>
               
-              <p>Расскажите о своем состоянии другим участникам</p>
+              <p>Расскажите о своем состоянии другим участников</p>
               
               <div className="status-indicators" id="current-user-status">
                 <div className="status-indicator" id="position-indicator">
