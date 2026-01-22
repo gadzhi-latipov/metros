@@ -8,13 +8,8 @@ const generateDeviceId = () => {
   let deviceId = localStorage.getItem('deviceId');
   
   if (!deviceId) {
-    deviceId = sessionStorage.getItem('deviceId');
-  }
-  
-  if (!deviceId) {
     deviceId = 'device_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
     localStorage.setItem('deviceId', deviceId);
-    sessionStorage.setItem('deviceId', deviceId);
     console.log('🆕 Создан новый deviceId:', deviceId);
   }
   
@@ -34,8 +29,7 @@ const saveSessionState = (state) => {
       timestamp: Date.now()
     };
     localStorage.setItem('metro_session_state', JSON.stringify(sessionData));
-    sessionStorage.setItem('metro_session_state', JSON.stringify(sessionData));
-    console.log('💾 Сохранено состояние сессии');
+    console.log('💾 Сохранено состояние сессии:', sessionData.userId?.substring(0, 10));
   } catch (error) {
     console.error('❌ Ошибка сохранения состояния сессии:', error);
   }
@@ -44,18 +38,15 @@ const saveSessionState = (state) => {
 // Загрузка состояния сессии
 const loadSessionState = () => {
   try {
-    let sessionData = localStorage.getItem('metro_session_state');
-    
-    if (!sessionData) {
-      sessionData = sessionStorage.getItem('metro_session_state');
-    }
+    const sessionData = localStorage.getItem('metro_session_state');
     
     if (sessionData) {
       const parsed = JSON.parse(sessionData);
       const now = Date.now();
       
-      if (now - parsed.timestamp < 30 * 60 * 1000) {
-        console.log('📂 Загружено сохраненное состояние сессии');
+      // Проверяем не старше 24 часов
+      if (now - parsed.timestamp < 24 * 60 * 60 * 1000) {
+        console.log('📂 Загружено сохраненное состояние сессии:', parsed.userId?.substring(0, 10));
         return parsed;
       } else {
         console.log('🕒 Состояние сессии устарело');
@@ -72,7 +63,6 @@ const loadSessionState = () => {
 // Очистка состояния сессии
 const clearSessionState = () => {
   localStorage.removeItem('metro_session_state');
-  sessionStorage.removeItem('metro_session_state');
   console.log('🧹 Очищено состояние сессии');
 };
 
@@ -101,7 +91,6 @@ const setUserOffline = async (userId, sessionId, deviceId) => {
 const calculateStationsStats = (users, city) => {
   try {
     console.log('📊 Вычисляем статистику станций для города:', city);
-    console.log('👥 Всего пользователей:', users.length);
     
     const stationStats = {};
     let total_connected = 0;
@@ -136,9 +125,6 @@ const calculateStationsStats = (users, city) => {
         if (stationStats[user.station]) {
           stationStats[user.station].connected++;
           stationStats[user.station].totalUsers++;
-        } else {
-          // Если станции нет в списке, но пользователь на ней
-          console.log('⚠️ Станция не найдена в списке города:', user.station);
         }
       }
     });
@@ -149,8 +135,7 @@ const calculateStationsStats = (users, city) => {
     console.log('📈 Статистика рассчитана:', {
       totalStations: stationStatsArray.length,
       totalConnected: total_connected,
-      totalWaiting: total_waiting,
-      stationsWithUsers: stationStatsArray.filter(s => s.totalUsers > 0).length
+      totalWaiting: total_waiting
     });
     
     return {
@@ -174,8 +159,8 @@ export const App = () => {
   const [fetchedUser, setUser] = useState();
   const [appState, setAppState] = useState('active');
   const [currentScreen, setCurrentScreen] = useState('setup');
-  const [selectedCity, setSelectedCity] = useState('spb');
-  const [selectedGender, setSelectedGender] = useState('male');
+  const [selectedCity, setSelectedCity] = useState(() => localStorage.getItem('selectedCity') || 'spb');
+  const [selectedGender, setSelectedGender] = useState(() => localStorage.getItem('selectedGender') || 'male');
   const [selectedPosition, setSelectedPosition] = useState('');
   const [selectedMood, setSelectedMood] = useState('');
   const [wagonNumber, setWagonNumber] = useState('');
@@ -230,7 +215,7 @@ export const App = () => {
   const userActivityRef = useRef(Date.now());
   const lastCleanupRef = useRef(0);
 
-  // Проверка и очистка дублирующих сессий
+  // Улучшенная проверка и очистка дублирующих сессий
   const checkAndCleanDuplicates = useCallback(async () => {
     const now = Date.now();
     
@@ -242,11 +227,11 @@ export const App = () => {
     lastCleanupRef.current = now;
     
     try {
-      console.log('🔄 Проверяем наличие дублирующих сессий...');
+      console.log('🔄 Проверяем наличие дублирующих сессий для device:', deviceId?.substring(0, 10));
       const users = await api.getUsers();
       
-      if (!deviceId || !userIdRef.current) {
-        console.log('⚠️ Нет deviceId или userId, пропускаем проверку дубликатов');
+      if (!deviceId) {
+        console.log('⚠️ Нет deviceId, пропускаем проверку дубликатов');
         return;
       }
       
@@ -267,8 +252,7 @@ export const App = () => {
       console.log('📊 Статистика сессий:', {
         deviceSessions: deviceSessions.length,
         userIdSessions: userIdSessions.length,
-        deviceId: deviceId,
-        currentUserId: userIdRef.current
+        currentUserId: userIdRef.current?.substring(0, 10)
       });
       
       // Если есть более одной сессии с этого устройства
@@ -276,10 +260,12 @@ export const App = () => {
         console.warn('⚠️ Обнаружены дублирующие сессии с этого устройства:', deviceSessions.length);
         setHasDuplicates(true);
         
-        // Оставляем только самую новую сессию
-        const sortedSessions = deviceSessions.sort((a, b) => 
-          new Date(b.last_seen || 0) - new Date(a.last_seen || 0)
-        );
+        // Сортируем по времени последней активности
+        const sortedSessions = deviceSessions.sort((a, b) => {
+          const timeA = new Date(a.last_seen || 0).getTime();
+          const timeB = new Date(b.last_seen || 0).getTime();
+          return timeB - timeA;
+        });
         
         const latestSession = sortedSessions[0];
         
@@ -287,7 +273,7 @@ export const App = () => {
         for (let i = 1; i < sortedSessions.length; i++) {
           const oldSession = sortedSessions[i];
           if (oldSession.id !== latestSession.id) {
-            console.log(`🧹 Деактивируем старую сессию: ${oldSession.id} (${oldSession.name})`);
+            console.log(`🧹 Деактивируем старую сессию: ${oldSession.id?.substring(0, 10)} (${oldSession.name})`);
             await api.updateUser(oldSession.id, {
               online: false,
               is_connected: false,
@@ -298,59 +284,62 @@ export const App = () => {
           }
         }
         
-        // Если текущий userId не совпадает с самой новой сессией, обновляем его
+        // Обновляем текущий userId
         if (userIdRef.current !== latestSession.id) {
-          console.log(`🔄 Смена userId с ${userIdRef.current} на ${latestSession.id}`);
+          console.log(`🔄 Смена userId с ${userIdRef.current?.substring(0, 10)} на ${latestSession.id?.substring(0, 10)}`);
           userIdRef.current = latestSession.id;
           sessionIdRef.current = latestSession.session_id || generateSessionId(deviceId);
+          
+          // Сохраняем состояние
+          saveSessionState({
+            userId: userIdRef.current,
+            nickname: latestSession.name,
+            selectedCity: latestSession.city || selectedCity,
+            selectedGender: latestSession.gender || selectedGender,
+            clothingColor: latestSession.color || clothingColor,
+            wagonNumber: latestSession.wagon || wagonNumber,
+            currentSelectedStation: latestSession.station || currentSelectedStation,
+            currentScreen: latestSession.is_connected ? 'joined' : latestSession.is_waiting ? 'waiting' : 'setup',
+            timestamp: Date.now()
+          });
         }
         
         console.log('✅ Дублирующие сессии очищены');
+        setHasDuplicates(false);
       } else if (deviceSessions.length === 1) {
         // Только одна сессия с устройства - все хорошо
         const currentSession = deviceSessions[0];
         
         // Если userId не установлен или не совпадает, обновляем
         if (!userIdRef.current || userIdRef.current !== currentSession.id) {
-          console.log(`🔄 Устанавливаем userId: ${currentSession.id}`);
+          console.log(`🔄 Устанавливаем userId из устройства: ${currentSession.id?.substring(0, 10)}`);
           userIdRef.current = currentSession.id;
           sessionIdRef.current = currentSession.session_id || generateSessionId(deviceId);
+          
+          // Обновляем локальные данные из сессии
+          if (currentSession.name) setNickname(currentSession.name);
+          if (currentSession.city) setSelectedCity(currentSession.city);
+          if (currentSession.gender) setSelectedGender(currentSession.gender);
+          if (currentSession.color) setClothingColor(currentSession.color);
+          if (currentSession.wagon) setWagonNumber(currentSession.wagon);
+          if (currentSession.station) setCurrentSelectedStation(currentSession.station);
+          
+          // Определяем экран на основе состояния сессии
+          if (currentSession.is_connected && currentSession.station) {
+            setCurrentScreen('joined');
+            setCurrentGroup({ station: currentSession.station, users: [] });
+          } else if (currentSession.is_waiting) {
+            setCurrentScreen('waiting');
+          }
         }
         
         setHasDuplicates(false);
       }
       
-      // Дополнительная проверка: если есть сессия с текущим userId, но не с текущим deviceId
-      if (userIdRef.current && userIdSessions.length > 0) {
-        const userSession = userIdSessions[0];
-        if (userSession.device_id !== deviceId) {
-          console.warn('⚠️ Сессия с userId найдена, но с другого устройства');
-          console.log(`Текущий deviceId: ${deviceId}, сессия deviceId: ${userSession.device_id}`);
-          
-          // Проверяем, нет ли конфликта с другим устройством
-          const conflictSession = users.find(u => 
-            u.id === userIdRef.current && 
-            u.device_id === deviceId
-          );
-          
-          if (!conflictSession) {
-            // Деактивируем сессию с другого устройства
-            console.log(`🧹 Деактивируем сессию с другого устройства: ${userSession.id}`);
-            await api.updateUser(userSession.id, {
-              online: false,
-              is_connected: false,
-              is_waiting: false,
-              status: 'Сессия с другого устройства',
-              last_seen: new Date().toISOString()
-            });
-          }
-        }
-      }
-      
     } catch (error) {
       console.error('❌ Ошибка при проверке дублирующих сессий:', error);
     }
-  }, [deviceId]);
+  }, [deviceId, selectedCity, selectedGender, clothingColor, wagonNumber, currentSelectedStation]);
 
   // Основная инициализация приложения
   useEffect(() => {
@@ -361,6 +350,17 @@ export const App = () => {
     setDeviceId(generatedDeviceId);
     
     console.log('📱 Идентификатор устройства:', generatedDeviceId);
+    
+    // Загружаем сохраненные данные из localStorage
+    const savedNickname = localStorage.getItem('nickname');
+    const savedClothingColor = localStorage.getItem('clothingColor');
+    const savedWagonNumber = localStorage.getItem('wagonNumber');
+    const savedSelectedStation = localStorage.getItem('selectedStation');
+    
+    if (savedNickname) setNickname(savedNickname);
+    if (savedClothingColor) setClothingColor(savedClothingColor);
+    if (savedWagonNumber) setWagonNumber(savedWagonNumber);
+    if (savedSelectedStation) setCurrentSelectedStation(savedSelectedStation);
     
     // Инициализация VK Bridge
     bridge.send("VKWebAppInit")
@@ -412,7 +412,7 @@ export const App = () => {
       if (!event.detail) return;
       
       const { type, data } = event.detail;
-      console.log('📡 VK Bridge событие:', type, data);
+      console.log('📡 VK Bridge событие:', type);
       
       switch (type) {
         case 'VKWebAppUpdateConfig':
@@ -464,7 +464,7 @@ export const App = () => {
     
     fetchUserData();
     
-    // Восстановление сессии пользователя
+    // Улучшенное восстановление сессии пользователя
     const restoreSession = async () => {
       if (sessionRestoreInProgressRef.current) {
         console.log('🔄 Восстановление сессии уже выполняется, пропускаем');
@@ -476,7 +476,7 @@ export const App = () => {
       setRestoreAttempted(true);
       
       try {
-        console.log('🔄 Начинаем восстановление сессии...');
+        console.log('🔄 Начинаем восстановление сессии для device:', generatedDeviceId);
         
         // Сначала проверяем и чистим дубликаты
         await checkAndCleanDuplicates();
@@ -484,81 +484,114 @@ export const App = () => {
         // Пытаемся загрузить сохраненное состояние
         const savedState = loadSessionState();
         
-        if (savedState && savedState.userId) {
-          console.log('📂 Используем сохраненное состояние сессии');
+        // Пытаемся найти активную сессию на сервере
+        let users = [];
+        try {
+          users = await api.getUsers();
+        } catch (error) {
+          console.error('❌ Не удалось загрузить пользователей с сервера:', error);
+        }
+        
+        // Ищем сессию по deviceId в первую очередь
+        let serverSession = users.find(user => 
+          user.device_id === generatedDeviceId &&
+          user.online === true
+        );
+        
+        // Если не нашли по deviceId, ищем по сохраненному userId
+        if (!serverSession && savedState?.userId) {
+          serverSession = users.find(user => 
+            user.id === savedState.userId &&
+            user.online === true
+          );
+        }
+        
+        if (serverSession) {
+          console.log('✅ Активная сессия найдена на сервере, восстанавливаем:', serverSession.id?.substring(0, 10));
+          userIdRef.current = serverSession.id;
+          sessionIdRef.current = serverSession.session_id || generateSessionId(generatedDeviceId);
           
+          // Восстанавливаем данные из серверной сессии
+          if (serverSession.name) setNickname(serverSession.name);
+          if (serverSession.city) setSelectedCity(serverSession.city);
+          if (serverSession.gender) setSelectedGender(serverSession.gender);
+          if (serverSession.color) setClothingColor(serverSession.color);
+          if (serverSession.wagon) setWagonNumber(serverSession.wagon);
+          if (serverSession.station) setCurrentSelectedStation(serverSession.station);
+          
+          // Обновляем сессию на сервере
           try {
-            const users = await api.getUsers();
-            
-            // Ищем сессию по deviceId в первую очередь
-            let serverSession = users.find(user => 
-              user.device_id === generatedDeviceId &&
-              user.online === true
-            );
-            
-            // Если не нашли по deviceId, ищем по userId
-            if (!serverSession) {
-              serverSession = users.find(user => 
-                user.id === savedState.userId &&
-                user.online === true
-              );
-            }
-            
-            if (serverSession) {
-              console.log('✅ Сессия найдена на сервере, восстанавливаем');
-              userIdRef.current = serverSession.id;
-              sessionIdRef.current = serverSession.session_id || generateSessionId(generatedDeviceId);
-              
-              // Восстанавливаем локальное состояние
-              if (savedState.nickname) setNickname(savedState.nickname);
-              if (savedState.selectedCity) setSelectedCity(savedState.selectedCity);
-              if (savedState.selectedGender) setSelectedGender(savedState.selectedGender);
-              if (savedState.clothingColor) setClothingColor(savedState.clothingColor);
-              if (savedState.wagonNumber) setWagonNumber(savedState.wagonNumber);
-              if (savedState.currentSelectedStation) setCurrentSelectedStation(savedState.currentSelectedStation);
-              
-              // Восстанавливаем экран
-              if (serverSession.is_connected && serverSession.station) {
-                setCurrentScreen('joined');
-                const groupData = {
-                  station: serverSession.station,
-                  users: []
-                };
-                setCurrentGroup(groupData);
-                
-                setTimeout(async () => {
-                  await loadGroupMembers(serverSession.station);
-                  await loadRequests();
-                }, 300);
-              } else if (serverSession.is_waiting) {
-                setCurrentScreen('waiting');
-                await loadRequests();
-              } else {
-                setCurrentScreen('setup');
-              }
-              
-              // Обновляем сессию на сервере
-              await api.updateUser(serverSession.id, {
-                session_id: sessionIdRef.current,
-                online: true,
-                last_seen: new Date().toISOString(),
-                device_id: generatedDeviceId
-              });
-              
-            } else {
-              console.log('❌ Сессия не найдена на сервере, начинаем заново');
-              clearSessionState();
-              setCurrentScreen('setup');
-            }
+            await api.updateUser(serverSession.id, {
+              session_id: sessionIdRef.current,
+              online: true,
+              last_seen: new Date().toISOString(),
+              device_id: generatedDeviceId
+            });
           } catch (error) {
-            console.error('❌ Ошибка восстановления из сохраненного состояния:', error);
-            clearSessionState();
+            console.error('❌ Ошибка обновления сессии на сервере:', error);
+          }
+          
+          // Определяем экран на основе состояния сессии
+          if (serverSession.is_connected && serverSession.station) {
+            setCurrentScreen('joined');
+            const groupData = {
+              station: serverSession.station,
+              users: []
+            };
+            setCurrentGroup(groupData);
+            
+            // Загружаем данные группы
+            setTimeout(async () => {
+              await loadGroupMembers(serverSession.station);
+              await loadRequests();
+            }, 300);
+          } else if (serverSession.is_waiting) {
+            setCurrentScreen('waiting');
+            setTimeout(async () => {
+              await loadStationsMap();
+              await loadRequests();
+            }, 300);
+          } else {
             setCurrentScreen('setup');
           }
+          
+          console.log('🎯 Сессия восстановлена. Экран:', currentScreen);
+          
+        } else if (savedState?.userId) {
+          console.log('🔄 Нет активной сессии на сервере, но есть сохраненное состояние');
+          
+          // Восстанавливаем из сохраненного состояния
+          userIdRef.current = savedState.userId;
+          sessionIdRef.current = generateSessionId(generatedDeviceId);
+          
+          if (savedState.nickname) setNickname(savedState.nickname);
+          if (savedState.selectedCity) setSelectedCity(savedState.selectedCity);
+          if (savedState.selectedGender) setSelectedGender(savedState.selectedGender);
+          if (savedState.clothingColor) setClothingColor(savedState.clothingColor);
+          if (savedState.wagonNumber) setWagonNumber(savedState.wagonNumber);
+          if (savedState.currentSelectedStation) setCurrentSelectedStation(savedState.currentSelectedStation);
+          
+          // Восстанавливаем экран
+          if (savedState.currentScreen === 'joined' && savedState.currentSelectedStation) {
+            setCurrentScreen('joined');
+            const groupData = {
+              station: savedState.currentSelectedStation,
+              users: []
+            };
+            setCurrentGroup(groupData);
+          } else if (savedState.currentScreen === 'waiting') {
+            setCurrentScreen('waiting');
+          } else {
+            setCurrentScreen('setup');
+          }
+          
+          console.log('📂 Восстановлено из сохраненного состояния. Экран:', savedState.currentScreen);
+          
         } else {
-          console.log('🆕 Нет сохраненного состояния, начинаем с настройки');
+          console.log('🆕 Нет сохраненной сессии, начинаем с настройки');
           setCurrentScreen('setup');
         }
+        
       } catch (error) {
         console.error('❌ Критическая ошибка восстановления сессии:', error);
         setCurrentScreen('setup');
@@ -566,12 +599,22 @@ export const App = () => {
         setIsSessionRestoring(false);
         sessionRestoreInProgressRef.current = false;
         setIsColdStart(false);
+        
+        // Загружаем карту станций если нужно
+        if (currentScreen === 'waiting') {
+          setTimeout(() => {
+            loadStationsMap();
+          }, 500);
+        }
       }
     };
     
-    restoreSession();
+    // Даем время на инициализацию, затем восстанавливаем сессию
+    setTimeout(() => {
+      restoreSession();
+    }, 1000);
     
-    // Запуск глобального обновления с проверкой дубликатов
+    // Запуск глобального обновления
     const cleanupGlobalRefresh = () => {
       const interval = setInterval(async () => {
         try {
@@ -700,8 +743,7 @@ export const App = () => {
       console.log('✅ Статистика загружена:', {
         stations: stats.stationStats.length,
         connected: stats.totalStats.total_connected,
-        waiting: stats.totalStats.total_waiting,
-        total: stats.totalStats.total_users
+        waiting: stats.totalStats.total_waiting
       });
       
       return stats;
@@ -728,15 +770,11 @@ export const App = () => {
     try {
       const users = await api.getUsers();
       
-      const groupUsers = users.filter(user => {
-        const isOnStation = user.station === targetStation && user.is_connected === true;
-        
-        if (userIdRef.current && user.id === userIdRef.current) {
-          return isOnStation && user.online === true;
-        }
-        
-        return isOnStation && user.online === true;
-      });
+      const groupUsers = users.filter(user => 
+        user.station === targetStation && 
+        user.is_connected === true &&
+        user.online === true
+      );
       
       console.log(`👥 Загружено участников группы для станции ${targetStation}:`, groupUsers.length);
       setGroupMembers(groupUsers);
@@ -817,54 +855,44 @@ export const App = () => {
     return () => clearInterval(realtimePollingInterval);
   }, [currentScreen, currentGroup]);
 
-  // Сохранение состояний в localStorage и sessionStorage при изменениях
+  // Сохранение состояний в localStorage при изменениях
   useEffect(() => {
-    localStorage.setItem('selectedCity', selectedCity);
-    localStorage.setItem('selectedGender', selectedGender);
-    localStorage.setItem('selectedPosition', selectedPosition);
-    localStorage.setItem('selectedMood', selectedMood);
-    localStorage.setItem('selectedStation', currentSelectedStation);
-    localStorage.setItem('selectedTimerMinutes', selectedMinutes);
-    localStorage.setItem('nickname', nickname);
-    localStorage.setItem('clothingColor', clothingColor);
-    localStorage.setItem('wagonNumber', wagonNumber);
-    localStorage.setItem('currentScreen', currentScreen);
-    
-    sessionStorage.setItem('selectedCity', selectedCity);
-    sessionStorage.setItem('selectedGender', selectedGender);
-    sessionStorage.setItem('selectedPosition', selectedPosition);
-    sessionStorage.setItem('selectedMood', selectedMood);
-    sessionStorage.setItem('selectedStation', currentSelectedStation);
-    sessionStorage.setItem('selectedTimerMinutes', selectedMinutes);
-    sessionStorage.setItem('nickname', nickname);
-    sessionStorage.setItem('clothingColor', clothingColor);
-    sessionStorage.setItem('wagonNumber', wagonNumber);
-    sessionStorage.setItem('currentScreen', currentScreen);
-    
-    if (currentGroup) {
-      localStorage.setItem('currentGroup', JSON.stringify(currentGroup));
-      sessionStorage.setItem('currentGroup', JSON.stringify(currentGroup));
-    }
-    
-    if (userIdRef.current && !isColdStart) {
-      const sessionState = {
-        userId: userIdRef.current,
-        nickname,
-        selectedCity,
-        selectedGender,
-        clothingColor,
-        wagonNumber,
-        currentSelectedStation,
-        currentScreen,
-        timestamp: Date.now()
-      };
+    if (!isColdStart) {
+      localStorage.setItem('selectedCity', selectedCity);
+      localStorage.setItem('selectedGender', selectedGender);
+      localStorage.setItem('selectedPosition', selectedPosition);
+      localStorage.setItem('selectedMood', selectedMood);
+      localStorage.setItem('selectedStation', currentSelectedStation || '');
+      localStorage.setItem('selectedTimerMinutes', selectedMinutes.toString());
+      localStorage.setItem('nickname', nickname);
+      localStorage.setItem('clothingColor', clothingColor);
+      localStorage.setItem('wagonNumber', wagonNumber);
+      localStorage.setItem('currentScreen', currentScreen);
       
-      saveSessionState(sessionState);
+      if (currentGroup) {
+        localStorage.setItem('currentGroup', JSON.stringify(currentGroup));
+      }
+      
+      if (userIdRef.current) {
+        const sessionState = {
+          userId: userIdRef.current,
+          nickname,
+          selectedCity,
+          selectedGender,
+          clothingColor,
+          wagonNumber,
+          currentSelectedStation,
+          currentScreen,
+          timestamp: Date.now()
+        };
+        
+        saveSessionState(sessionState);
+      }
     }
   }, [
     selectedCity, selectedGender, selectedPosition, selectedMood,
     currentSelectedStation, selectedMinutes, nickname, clothingColor,
-    wagonNumber, currentScreen, currentGroup
+    wagonNumber, currentScreen, currentGroup, isColdStart
   ]);
 
   useEffect(() => {
@@ -1034,7 +1062,7 @@ export const App = () => {
       
       if (existingDeviceSession) {
         // Используем существующую сессию с этого устройства
-        console.log('🔄 Используем существующую сессию с устройства:', existingDeviceSession.id);
+        console.log('🔄 Используем существующую сессию с устройства:', existingDeviceSession.id?.substring(0, 10));
         
         // Деактивируем дублирующие сессии с таким же никнеймом
         if (existingNicknameSession && existingNicknameSession.id !== existingDeviceSession.id) {
@@ -1107,7 +1135,7 @@ export const App = () => {
         if (createdUser) {
           userIdRef.current = createdUser.id;
           sessionIdRef.current = newSessionId;
-          console.log('✅ Создана новая сессия:', createdUser.id);
+          console.log('✅ Создана новая сессия:', createdUser.id?.substring(0, 10));
         }
       }
       
@@ -1125,13 +1153,13 @@ export const App = () => {
           timestamp: Date.now()
         });
         
-        setTimeout(() => {
-          setCurrentScreen('waiting');
+        setCurrentScreen('waiting');
+        
+        setTimeout(async () => {
+          await loadStationsMap();
+          await loadRequests();
         }, 100);
 
-        await loadStationsMap();
-        await loadRequests();
-        
         bridge.send("VKWebAppShowSnackbar", {
           text: '✅ Профиль создан успешно'
         });
@@ -1151,13 +1179,6 @@ export const App = () => {
     console.log('📍 === НАЧАЛО handleConfirmStation ===');
     
     if (!validateClothingColor()) {
-      return;
-    }
-    
-    if (!nickname || nickname.trim() === '') {
-      bridge.send("VKWebAppShowSnackbar", {
-        text: '❌ Пожалуйста, введите ваш никнейм'
-      });
       return;
     }
     
@@ -1411,7 +1432,7 @@ export const App = () => {
         
         saveSessionState(sessionState);
         
-        console.log('📱 Страница закрывается, сохраняем сессию для восстановления');
+        console.log('📱 Сохранена сессия для восстановления:', userIdRef.current?.substring(0, 10));
       }
     };
 
@@ -1464,11 +1485,6 @@ export const App = () => {
     const stationsMap = {};
     stationStats.forEach(station => {
       stationsMap[station.station] = station;
-    });
-    
-    console.log('🗺️ Рендерим станции:', {
-      totalStations: cityStations.length,
-      stationsWithData: Object.keys(stationsMap).length
     });
     
     return cityStations.map(stationName => {
