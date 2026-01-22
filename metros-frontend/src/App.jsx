@@ -29,7 +29,7 @@ const saveSessionState = (state) => {
       timestamp: Date.now()
     };
     localStorage.setItem('metro_session_state', JSON.stringify(sessionData));
-    console.log('💾 Сохранено состояние сессии:', sessionData.userId?.substring(0, 10));
+    console.log('💾 Сохранено состояние сессии:', state.userId);
   } catch (error) {
     console.error('❌ Ошибка сохранения состояния сессии:', error);
   }
@@ -46,7 +46,7 @@ const loadSessionState = () => {
       
       // Проверяем не старше 24 часов
       if (now - parsed.timestamp < 24 * 60 * 60 * 1000) {
-        console.log('📂 Загружено сохраненное состояние сессии:', parsed.userId?.substring(0, 10));
+        console.log('📂 Загружено сохраненное состояние сессии:', parsed.userId);
         return parsed;
       } else {
         console.log('🕒 Состояние сессии устарело');
@@ -227,7 +227,7 @@ export const App = () => {
     lastCleanupRef.current = now;
     
     try {
-      console.log('🔄 Проверяем наличие дублирующих сессий для device:', deviceId?.substring(0, 10));
+      console.log('🔄 Проверяем наличие дублирующих сессий для device:', deviceId);
       const users = await api.getUsers();
       
       if (!deviceId) {
@@ -252,7 +252,7 @@ export const App = () => {
       console.log('📊 Статистика сессий:', {
         deviceSessions: deviceSessions.length,
         userIdSessions: userIdSessions.length,
-        currentUserId: userIdRef.current?.substring(0, 10)
+        currentUserId: userIdRef.current
       });
       
       // Если есть более одной сессии с этого устройства
@@ -273,7 +273,7 @@ export const App = () => {
         for (let i = 1; i < sortedSessions.length; i++) {
           const oldSession = sortedSessions[i];
           if (oldSession.id !== latestSession.id) {
-            console.log(`🧹 Деактивируем старую сессию: ${oldSession.id?.substring(0, 10)} (${oldSession.name})`);
+            console.log(`🧹 Деактивируем старую сессию: ${oldSession.id} (${oldSession.name})`);
             await api.updateUser(oldSession.id, {
               online: false,
               is_connected: false,
@@ -286,7 +286,7 @@ export const App = () => {
         
         // Обновляем текущий userId
         if (userIdRef.current !== latestSession.id) {
-          console.log(`🔄 Смена userId с ${userIdRef.current?.substring(0, 10)} на ${latestSession.id?.substring(0, 10)}`);
+          console.log(`🔄 Смена userId с ${userIdRef.current} на ${latestSession.id}`);
           userIdRef.current = latestSession.id;
           sessionIdRef.current = latestSession.session_id || generateSessionId(deviceId);
           
@@ -312,7 +312,7 @@ export const App = () => {
         
         // Если userId не установлен или не совпадает, обновляем
         if (!userIdRef.current || userIdRef.current !== currentSession.id) {
-          console.log(`🔄 Устанавливаем userId из устройства: ${currentSession.id?.substring(0, 10)}`);
+          console.log(`🔄 Устанавливаем userId из устройства: ${currentSession.id}`);
           userIdRef.current = currentSession.id;
           sessionIdRef.current = currentSession.session_id || generateSessionId(deviceId);
           
@@ -507,7 +507,7 @@ export const App = () => {
         }
         
         if (serverSession) {
-          console.log('✅ Активная сессия найдена на сервере, восстанавливаем:', serverSession.id?.substring(0, 10));
+          console.log('✅ Активная сессия найдена на сервере, восстанавливаем:', serverSession.id);
           userIdRef.current = serverSession.id;
           sessionIdRef.current = serverSession.session_id || generateSessionId(generatedDeviceId);
           
@@ -1062,7 +1062,7 @@ export const App = () => {
       
       if (existingDeviceSession) {
         // Используем существующую сессию с этого устройства
-        console.log('🔄 Используем существующую сессию с устройства:', existingDeviceSession.id?.substring(0, 10));
+        console.log('🔄 Используем существующую сессию с устройства:', existingDeviceSession.id);
         
         // Деактивируем дублирующие сессии с таким же никнеймом
         if (existingNicknameSession && existingNicknameSession.id !== existingDeviceSession.id) {
@@ -1132,10 +1132,12 @@ export const App = () => {
 
         createdUser = await api.createUser(userData);
         
-        if (createdUser) {
+        if (createdUser && createdUser.id) {
           userIdRef.current = createdUser.id;
           sessionIdRef.current = newSessionId;
-          console.log('✅ Создана новая сессия:', createdUser.id?.substring(0, 10));
+          console.log('✅ Создана новая сессия:', createdUser.id);
+        } else {
+          throw new Error('Не удалось создать пользователя');
         }
       }
       
@@ -1432,7 +1434,7 @@ export const App = () => {
         
         saveSessionState(sessionState);
         
-        console.log('📱 Сохранена сессия для восстановления:', userIdRef.current?.substring(0, 10));
+        console.log('📱 Сохранена сессия для восстановления:', userIdRef.current);
       }
     };
 
@@ -1591,8 +1593,8 @@ export const App = () => {
           borderRadius: '5px',
           textAlign: 'center'
         }}>
-          📱 Device: {deviceId?.substring(0, 10)}... | 
-          👤 User ID: {userIdRef.current ? userIdRef.current.substring(0, 10) + '...' : 'none'} | 
+          📱 Device: {deviceId} | 
+          👤 User ID: {userIdRef.current ? userIdRef.current : 'none'} | 
           🖥️ Screen: {currentScreen} |
           🕒 До автоотключения: {minutesLeft} мин |
           📊 Stats: {stationsData.totalStats?.total_connected || 0}✅ {stationsData.totalStats?.total_waiting || 0}⏳
