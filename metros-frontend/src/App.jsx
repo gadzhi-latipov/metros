@@ -3,14 +3,50 @@ import bridge from '@vkontakte/vk-bridge';
 import './App.css';
 import { api, helpers } from './services/api';
 
-// Генерация уникального ID устройства с улучшенным хранением
+// Устойчивое хранение deviceId
 const generateDeviceId = () => {
-  let deviceId = localStorage.getItem('deviceId');
+  // Пробуем несколько способов получить стабильный ID
+  let deviceId = localStorage.getItem('metro_device_id');
   
   if (!deviceId) {
-    deviceId = 'device_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
-    localStorage.setItem('deviceId', deviceId);
+    // Проверяем в sessionStorage
+    deviceId = sessionStorage.getItem('metro_device_id');
+  }
+  
+  if (!deviceId) {
+    // Генерируем новый ID
+    const timestamp = Date.now();
+    const randomStr = Math.random().toString(36).substr(2, 12);
+    deviceId = `metro_${timestamp}_${randomStr}`;
+    
+    // Сохраняем в нескольких местах
+    localStorage.setItem('metro_device_id', deviceId);
+    sessionStorage.setItem('metro_device_id', deviceId);
+    
+    // Пробуем сохранить в IndexedDB если доступен
+    try {
+      if (window.indexedDB) {
+        const request = indexedDB.open('metro_app_db', 1);
+        request.onupgradeneeded = (event) => {
+          const db = event.target.result;
+          if (!db.objectStoreNames.contains('app_data')) {
+            db.createObjectStore('app_data');
+          }
+        };
+        request.onsuccess = (event) => {
+          const db = event.target.result;
+          const transaction = db.transaction(['app_data'], 'readwrite');
+          const store = transaction.objectStore('app_data');
+          store.put(deviceId, 'device_id');
+        };
+      }
+    } catch (e) {
+      console.log('IndexedDB не доступен, продолжаем без него');
+    }
+    
     console.log('🆕 Создан новый deviceId:', deviceId);
+  } else {
+    console.log('📱 Восстановлен существующий deviceId:', deviceId);
   }
   
   return deviceId;
@@ -28,8 +64,22 @@ const saveSessionState = (state) => {
       ...state,
       timestamp: Date.now()
     };
+    
+    // Сохраняем полное состояние
     localStorage.setItem('metro_session_state', JSON.stringify(sessionData));
-    console.log('💾 Сохранено состояние сессии:', state.userId);
+    
+    // Дополнительно сохраняем критичные данные отдельно
+    if (state.userId) {
+      localStorage.setItem('metro_last_user_id', state.userId);
+    }
+    if (state.nickname) {
+      localStorage.setItem('metro_last_nickname', state.nickname);
+    }
+    if (state.deviceId) {
+      localStorage.setItem('metro_device_id', state.deviceId);
+    }
+    
+    console.log('💾 Сохранено состояние сессии для:', state.nickname || 'пользователя');
   } catch (error) {
     console.error('❌ Ошибка сохранения состояния сессии:', error);
   }
@@ -38,21 +88,37 @@ const saveSessionState = (state) => {
 // Загрузка состояния сессии
 const loadSessionState = () => {
   try {
+    // Пробуем загрузить полное состояние
     const sessionData = localStorage.getItem('metro_session_state');
     
     if (sessionData) {
       const parsed = JSON.parse(sessionData);
       const now = Date.now();
       
-      // Проверяем не старше 24 часов
-      if (now - parsed.timestamp < 24 * 60 * 60 * 1000) {
-        console.log('📂 Загружено сохраненное состояние сессии:', parsed.userId);
+      // Проверяем не старше 3 дней
+      if (now - parsed.timestamp < 3 * 24 * 60 * 60 * 1000) {
+        console.log('📂 Загружено сохраненное состояние сессии:', parsed.nickname || parsed.userId);
         return parsed;
       } else {
-        console.log('🕒 Состояние сессии устарело');
-        clearSessionState();
+        console.log('🕒 Состояние сессии устарело (более 3 дней)');
       }
     }
+    
+    // Если полное состояние не найдено или устарело, пробуем восстановить из отдельных полей
+    const userId = localStorage.getItem('metro_last_user_id');
+    const nickname = localStorage.getItem('metro_last_nickname');
+    const deviceId = localStorage.getItem('metro_device_id');
+    
+    if (userId && deviceId) {
+      console.log('🔄 Восстановление из разрозненных данных');
+      return {
+        userId,
+        nickname: nickname || '',
+        deviceId,
+        timestamp: Date.now() - 60 * 60 * 1000 // Помечаем как недавнее
+      };
+    }
+    
   } catch (error) {
     console.error('❌ Ошибка загрузки состояния сессии:', error);
   }
@@ -63,6 +129,8 @@ const loadSessionState = () => {
 // Очистка состояния сессии
 const clearSessionState = () => {
   localStorage.removeItem('metro_session_state');
+  localStorage.removeItem('metro_last_user_id');
+  localStorage.removeItem('metro_last_nickname');
   console.log('🧹 Очищено состояние сессии');
 };
 
@@ -191,6 +259,7 @@ export const App = () => {
   const [isColdStart, setIsColdStart] = useState(true);
   const [inactivityTimer, setInactivityTimer] = useState(30 * 60 * 1000);
   const [hasDuplicates, setHasDuplicates] = useState(false);
+  const [sessionInfo, setSessionInfo] = useState('');
   
   const CACHE_DURATION = 10000;
   const PING_INTERVAL = 15000;
@@ -214,6 +283,7 @@ export const App = () => {
   const isAppActiveRef = useRef(true);
   const userActivityRef = useRef(Date.now());
   const lastCleanupRef = useRef(0);
+  const restoreTimeoutRef = useRef(null);
 
   // Улучшенная проверка и очистка дублирующих сессий
   const checkAndCleanDuplicates = useCallback(async () => {
@@ -299,6 +369,7 @@ export const App = () => {
             clothingColor: latestSession.color || clothingColor,
             wagonNumber: latestSession.wagon || wagonNumber,
             currentSelectedStation: latestSession.station || currentSelectedStation,
+            deviceId: deviceId,
             currentScreen: latestSession.is_connected ? 'joined' : latestSession.is_waiting ? 'waiting' : 'setup',
             timestamp: Date.now()
           });
@@ -331,6 +402,20 @@ export const App = () => {
           } else if (currentSession.is_waiting) {
             setCurrentScreen('waiting');
           }
+          
+          // Сохраняем состояние
+          saveSessionState({
+            userId: userIdRef.current,
+            nickname: currentSession.name || nickname,
+            selectedCity: currentSession.city || selectedCity,
+            selectedGender: currentSession.gender || selectedGender,
+            clothingColor: currentSession.color || clothingColor,
+            wagonNumber: currentSession.wagon || wagonNumber,
+            currentSelectedStation: currentSession.station || currentSelectedStation,
+            deviceId: deviceId,
+            currentScreen: currentScreen,
+            timestamp: Date.now()
+          });
         }
         
         setHasDuplicates(false);
@@ -339,7 +424,148 @@ export const App = () => {
     } catch (error) {
       console.error('❌ Ошибка при проверке дублирующих сессий:', error);
     }
-  }, [deviceId, selectedCity, selectedGender, clothingColor, wagonNumber, currentSelectedStation]);
+  }, [deviceId, selectedCity, selectedGender, clothingColor, wagonNumber, currentSelectedStation, currentScreen, nickname]);
+
+  // Восстановление из серверной сессии
+  const restoreFromServerSession = useCallback(async (serverSession) => {
+    console.log('🔄 Восстановление из серверной сессии:', serverSession.id);
+    
+    userIdRef.current = serverSession.id;
+    sessionIdRef.current = serverSession.session_id || generateSessionId(deviceId);
+    
+    // Восстанавливаем данные из серверной сессии
+    const updates = [];
+    if (serverSession.name && serverSession.name !== nickname) {
+      setNickname(serverSession.name);
+      updates.push('nickname');
+    }
+    if (serverSession.city && serverSession.city !== selectedCity) {
+      setSelectedCity(serverSession.city);
+      updates.push('city');
+    }
+    if (serverSession.gender && serverSession.gender !== selectedGender) {
+      setSelectedGender(serverSession.gender);
+      updates.push('gender');
+    }
+    if (serverSession.color && serverSession.color !== clothingColor) {
+      setClothingColor(serverSession.color);
+      updates.push('color');
+    }
+    if (serverSession.wagon && serverSession.wagon !== wagonNumber) {
+      setWagonNumber(serverSession.wagon);
+      updates.push('wagon');
+    }
+    if (serverSession.station && serverSession.station !== currentSelectedStation) {
+      setCurrentSelectedStation(serverSession.station);
+      updates.push('station');
+    }
+    
+    if (updates.length > 0) {
+      console.log('🔄 Обновлены поля:', updates);
+    }
+    
+    // Обновляем сессию на сервере
+    try {
+      await api.updateUser(serverSession.id, {
+        session_id: sessionIdRef.current,
+        online: true,
+        last_seen: new Date().toISOString(),
+        device_id: deviceId
+      });
+      console.log('✅ Сессия обновлена на сервере');
+    } catch (error) {
+      console.error('❌ Ошибка обновления сессии на сервере:', error);
+    }
+    
+    // Определяем экран на основе состояния сессии
+    let targetScreen = 'setup';
+    if (serverSession.is_connected && serverSession.station) {
+      targetScreen = 'joined';
+      setCurrentGroup({ station: serverSession.station, users: [] });
+    } else if (serverSession.is_waiting) {
+      targetScreen = 'waiting';
+    }
+    
+    setCurrentScreen(targetScreen);
+    
+    // Сохраняем восстановленное состояние
+    saveSessionState({
+      userId: userIdRef.current,
+      nickname: serverSession.name || nickname,
+      selectedCity: serverSession.city || selectedCity,
+      selectedGender: serverSession.gender || selectedGender,
+      clothingColor: serverSession.color || clothingColor,
+      wagonNumber: serverSession.wagon || wagonNumber,
+      currentSelectedStation: serverSession.station || currentSelectedStation,
+      deviceId: deviceId,
+      currentScreen: targetScreen,
+      timestamp: Date.now()
+    });
+    
+    console.log('🎯 Сессия восстановлена с сервера. Экран:', targetScreen);
+    
+    // Загружаем данные если нужно
+    if (targetScreen === 'joined' && serverSession.station) {
+      setTimeout(async () => {
+        await loadGroupMembers(serverSession.station);
+        await loadRequests();
+      }, 300);
+    } else if (targetScreen === 'waiting') {
+      setTimeout(async () => {
+        await loadStationsMap();
+        await loadRequests();
+      }, 300);
+    }
+    
+    return targetScreen;
+  }, [deviceId, nickname, selectedCity, selectedGender, clothingColor, wagonNumber, currentSelectedStation]);
+
+  // Восстановление из локального состояния
+  const restoreFromLocalState = useCallback((savedState) => {
+    console.log('📂 Восстановление из локальных данных');
+    
+    userIdRef.current = savedState.userId;
+    sessionIdRef.current = generateSessionId(deviceId);
+    
+    if (savedState.nickname) setNickname(savedState.nickname);
+    if (savedState.selectedCity) setSelectedCity(savedState.selectedCity);
+    if (savedState.selectedGender) setSelectedGender(savedState.selectedGender);
+    if (savedState.clothingColor) setClothingColor(savedState.clothingColor);
+    if (savedState.wagonNumber) setWagonNumber(savedState.wagonNumber);
+    if (savedState.currentSelectedStation) setCurrentSelectedStation(savedState.currentSelectedStation);
+    
+    // Восстанавливаем экран
+    let targetScreen = 'setup';
+    if (savedState.currentScreen === 'joined' && savedState.currentSelectedStation) {
+      targetScreen = 'joined';
+      setCurrentGroup({ station: savedState.currentSelectedStation, users: [] });
+    } else if (savedState.currentScreen === 'waiting') {
+      targetScreen = 'waiting';
+    }
+    
+    setCurrentScreen(targetScreen);
+    
+    console.log('📂 Восстановлено из локальных данных. Экран:', targetScreen);
+    
+    // Обновляем сессию на сервере если можем
+    if (savedState.userId) {
+      setTimeout(async () => {
+        try {
+          await api.updateUser(savedState.userId, {
+            session_id: sessionIdRef.current,
+            device_id: deviceId,
+            online: true,
+            last_seen: new Date().toISOString()
+          });
+          console.log('✅ Локальная сессия синхронизирована с сервером');
+        } catch (error) {
+          console.error('❌ Не удалось синхронизировать локальную сессию:', error);
+        }
+      }, 1000);
+    }
+    
+    return targetScreen;
+  }, [deviceId]);
 
   // Основная инициализация приложения
   useEffect(() => {
@@ -348,6 +574,7 @@ export const App = () => {
     // Инициализация устройства
     const generatedDeviceId = generateDeviceId();
     setDeviceId(generatedDeviceId);
+    setSessionInfo(`Device: ${generatedDeviceId.substring(0, 10)}...`);
     
     console.log('📱 Идентификатор устройства:', generatedDeviceId);
     
@@ -478,18 +705,21 @@ export const App = () => {
       try {
         console.log('🔄 Начинаем восстановление сессии для device:', generatedDeviceId);
         
-        // Сначала проверяем и чистим дубликаты
-        await checkAndCleanDuplicates();
-        
-        // Пытаемся загрузить сохраненное состояние
+        // Загружаем сохраненное состояние
         const savedState = loadSessionState();
         
         // Пытаемся найти активную сессию на сервере
         let users = [];
         try {
           users = await api.getUsers();
+          console.log('📊 Получено пользователей с сервера:', users.length);
         } catch (error) {
           console.error('❌ Не удалось загрузить пользователей с сервера:', error);
+          // Даже если сервер недоступен, пробуем восстановить из локальных данных
+          if (savedState) {
+            restoreFromLocalState(savedState);
+            return;
+          }
         }
         
         // Ищем сессию по deviceId в первую очередь
@@ -500,93 +730,28 @@ export const App = () => {
         
         // Если не нашли по deviceId, ищем по сохраненному userId
         if (!serverSession && savedState?.userId) {
+          console.log('🔍 Ищем сессию по сохраненному userId:', savedState.userId);
           serverSession = users.find(user => 
             user.id === savedState.userId &&
             user.online === true
           );
         }
         
+        // Ищем по nickname как последний вариант
+        if (!serverSession && savedState?.nickname) {
+          console.log('🔍 Ищем сессию по никнейму:', savedState.nickname);
+          serverSession = users.find(user => 
+            user.name === savedState.nickname &&
+            user.online === true
+          );
+        }
+        
         if (serverSession) {
-          console.log('✅ Активная сессия найдена на сервере, восстанавливаем:', serverSession.id);
-          userIdRef.current = serverSession.id;
-          sessionIdRef.current = serverSession.session_id || generateSessionId(generatedDeviceId);
-          
-          // Восстанавливаем данные из серверной сессии
-          if (serverSession.name) setNickname(serverSession.name);
-          if (serverSession.city) setSelectedCity(serverSession.city);
-          if (serverSession.gender) setSelectedGender(serverSession.gender);
-          if (serverSession.color) setClothingColor(serverSession.color);
-          if (serverSession.wagon) setWagonNumber(serverSession.wagon);
-          if (serverSession.station) setCurrentSelectedStation(serverSession.station);
-          
-          // Обновляем сессию на сервере
-          try {
-            await api.updateUser(serverSession.id, {
-              session_id: sessionIdRef.current,
-              online: true,
-              last_seen: new Date().toISOString(),
-              device_id: generatedDeviceId
-            });
-          } catch (error) {
-            console.error('❌ Ошибка обновления сессии на сервере:', error);
-          }
-          
-          // Определяем экран на основе состояния сессии
-          if (serverSession.is_connected && serverSession.station) {
-            setCurrentScreen('joined');
-            const groupData = {
-              station: serverSession.station,
-              users: []
-            };
-            setCurrentGroup(groupData);
-            
-            // Загружаем данные группы
-            setTimeout(async () => {
-              await loadGroupMembers(serverSession.station);
-              await loadRequests();
-            }, 300);
-          } else if (serverSession.is_waiting) {
-            setCurrentScreen('waiting');
-            setTimeout(async () => {
-              await loadStationsMap();
-              await loadRequests();
-            }, 300);
-          } else {
-            setCurrentScreen('setup');
-          }
-          
-          console.log('🎯 Сессия восстановлена. Экран:', currentScreen);
-          
-        } else if (savedState?.userId) {
-          console.log('🔄 Нет активной сессии на сервере, но есть сохраненное состояние');
-          
-          // Восстанавливаем из сохраненного состояния
-          userIdRef.current = savedState.userId;
-          sessionIdRef.current = generateSessionId(generatedDeviceId);
-          
-          if (savedState.nickname) setNickname(savedState.nickname);
-          if (savedState.selectedCity) setSelectedCity(savedState.selectedCity);
-          if (savedState.selectedGender) setSelectedGender(savedState.selectedGender);
-          if (savedState.clothingColor) setClothingColor(savedState.clothingColor);
-          if (savedState.wagonNumber) setWagonNumber(savedState.wagonNumber);
-          if (savedState.currentSelectedStation) setCurrentSelectedStation(savedState.currentSelectedStation);
-          
-          // Восстанавливаем экран
-          if (savedState.currentScreen === 'joined' && savedState.currentSelectedStation) {
-            setCurrentScreen('joined');
-            const groupData = {
-              station: savedState.currentSelectedStation,
-              users: []
-            };
-            setCurrentGroup(groupData);
-          } else if (savedState.currentScreen === 'waiting') {
-            setCurrentScreen('waiting');
-          } else {
-            setCurrentScreen('setup');
-          }
-          
-          console.log('📂 Восстановлено из сохраненного состояния. Экран:', savedState.currentScreen);
-          
+          console.log('✅ Активная сессия найдена на сервере:', serverSession.id);
+          await restoreFromServerSession(serverSession);
+        } else if (savedState) {
+          console.log('🔄 Нет активной сессии на сервере, восстанавливаем из локальных данных');
+          restoreFromLocalState(savedState);
         } else {
           console.log('🆕 Нет сохраненной сессии, начинаем с настройки');
           setCurrentScreen('setup');
@@ -609,10 +774,10 @@ export const App = () => {
       }
     };
     
-    // Даем время на инициализацию, затем восстанавливаем сессию
-    setTimeout(() => {
+    // Запускаем восстановление сессии с задержкой
+    restoreTimeoutRef.current = setTimeout(() => {
       restoreSession();
-    }, 1000);
+    }, 800);
     
     // Запуск глобального обновления
     const cleanupGlobalRefresh = () => {
@@ -711,6 +876,7 @@ export const App = () => {
       clearTimeout(offlineTimeoutRef.current);
       clearTimeout(pingTimeoutRef.current);
       clearTimeout(inactivityTimeoutRef.current);
+      clearTimeout(restoreTimeoutRef.current);
       
       if (appVisibilityHandlerRef.current) {
         document.removeEventListener('visibilitychange', appVisibilityHandlerRef.current);
@@ -882,6 +1048,7 @@ export const App = () => {
           clothingColor,
           wagonNumber,
           currentSelectedStation,
+          deviceId,
           currentScreen,
           timestamp: Date.now()
         };
@@ -892,7 +1059,7 @@ export const App = () => {
   }, [
     selectedCity, selectedGender, selectedPosition, selectedMood,
     currentSelectedStation, selectedMinutes, nickname, clothingColor,
-    wagonNumber, currentScreen, currentGroup, isColdStart
+    wagonNumber, currentScreen, currentGroup, isColdStart, deviceId
   ]);
 
   useEffect(() => {
@@ -1151,6 +1318,7 @@ export const App = () => {
           clothingColor,
           wagonNumber,
           currentSelectedStation,
+          deviceId: deviceId,
           currentScreen: 'waiting',
           timestamp: Date.now()
         });
@@ -1238,6 +1406,7 @@ export const App = () => {
         clothingColor: clothingColor.trim(),
         wagonNumber,
         currentSelectedStation,
+        deviceId: deviceId,
         currentScreen: 'joined',
         timestamp: Date.now()
       });
@@ -1284,6 +1453,7 @@ export const App = () => {
           clothingColor,
           wagonNumber,
           currentSelectedStation: null,
+          deviceId: deviceId,
           currentScreen: 'waiting',
           timestamp: Date.now()
         });
@@ -1428,6 +1598,7 @@ export const App = () => {
           clothingColor,
           wagonNumber,
           currentSelectedStation,
+          deviceId: deviceId,
           currentScreen,
           timestamp: Date.now()
         };
@@ -1593,7 +1764,7 @@ export const App = () => {
           borderRadius: '5px',
           textAlign: 'center'
         }}>
-          📱 Device: {deviceId} | 
+          📱 Device: {deviceId ? deviceId.substring(0, 10) + '...' : 'none'} | 
           👤 User ID: {userIdRef.current ? userIdRef.current : 'none'} | 
           🖥️ Screen: {currentScreen} |
           🕒 До автоотключения: {minutesLeft} мин |
@@ -1601,6 +1772,11 @@ export const App = () => {
           {hasDuplicates && (
             <span style={{color: '#ff4444', marginLeft: '10px'}}>
               ⚠️ Обнаружены дубликаты
+            </span>
+          )}
+          {isSessionRestoring && (
+            <span style={{color: '#007bff', marginLeft: '10px'}}>
+              🔄 Восстановление...
             </span>
           )}
         </div>
