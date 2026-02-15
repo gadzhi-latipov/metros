@@ -1,99 +1,93 @@
-// services/api.js
+// services/api.js - ОПТИМИЗИРОВАННАЯ ВЕРСИЯ
 
 const BASE_URL = 'https://metro-backend-xlkt.onrender.com/api';
-const USE_MOCK_DATA = false; // Переключите на true для разработки без бэкенда
+const USE_MOCK_FALLBACK = true; // Всегда использовать мок при ошибках
 
-// Очередь запросов для предотвращения спама
+// Кэш запросов
+const cache = {
+  users: { data: null, time: 0 },
+  stats: { data: null, time: 0 }
+};
+
+const CACHE_TTL = 2000; // 2 секунды
+
+// Очередь запросов
+let pendingRequests = {};
 let requestQueue = [];
 let isProcessing = false;
-let lastRequestTime = 0;
-const REQUEST_DELAY = 1000; // 1 секунда между запросами
 
-// Обработка очереди запросов
-const processQueue = async () => {
+// Быстрый fetch с таймаутом
+const fastFetch = async (url, options = {}) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 секунды таймаут
+  
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+      }
+    });
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    clearTimeout(timeoutId);
+    throw error;
+  }
+};
+
+// Обработка очереди
+const processRequestQueue = async () => {
   if (isProcessing || requestQueue.length === 0) return;
   
   isProcessing = true;
-  const now = Date.now();
-  const timeSinceLastRequest = now - lastRequestTime;
-  
-  // Ждем если запросы слишком частые
-  if (timeSinceLastRequest < REQUEST_DELAY) {
-    await new Promise(resolve => 
-      setTimeout(resolve, REQUEST_DELAY - timeSinceLastRequest)
-    );
-  }
-  
   const request = requestQueue.shift();
+  
   try {
-    lastRequestTime = Date.now();
-    
-    if (USE_MOCK_DATA) {
-      // Используем мок данные
-      await new Promise(resolve => setTimeout(resolve, 200)); // Имитация задержки
-      const mockResponse = getMockResponse(request.endpoint, request.options);
-      request.resolve(mockResponse);
-    } else {
-      // Реальный запрос
-      const response = await fetch(`${BASE_URL}${request.endpoint}`, request.options);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      request.resolve(data);
-    }
+    const result = await fastFetch(request.url, request.options);
+    request.resolve(result);
   } catch (error) {
-    // При ошибке используем мок данные как fallback
-    console.warn(`API Error [${request.options.method} ${request.endpoint}]:`, error.message);
-    console.log('🔄 Используем fallback мок данные');
-    
-    try {
-      const mockResponse = getMockResponse(request.endpoint, request.options);
-      request.resolve(mockResponse);
-    } catch (mockError) {
+    // Возвращаем мок при ошибке
+    const mockData = getMockResponse(request.url, request.options);
+    if (mockData) {
+      request.resolve(mockData);
+    } else {
       request.reject(error);
     }
   } finally {
     isProcessing = false;
     if (requestQueue.length > 0) {
-      setTimeout(processQueue, 100);
+      setTimeout(processRequestQueue, 10);
     }
   }
 };
 
-// Добавление запроса в очередь
-const queuedRequest = (endpoint, options = {}) => {
+// Добавление в очередь
+const queuedFetch = (endpoint, options = {}) => {
   return new Promise((resolve, reject) => {
-    const defaultOptions = {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
-      ...options,
-    };
-
-    if (options.body) {
-      defaultOptions.body = JSON.stringify(options.body);
-    }
-
     requestQueue.push({
-      endpoint,
-      options: defaultOptions,
+      url: `${BASE_URL}${endpoint}`,
+      options,
       resolve,
       reject
     });
     
     if (!isProcessing) {
-      processQueue();
+      processRequestQueue();
     }
   });
 };
 
-// Мок данные для разработки
-const getMockResponse = (endpoint, options) => {
+// Мок данные (быстрые)
+const getMockResponse = (url, options) => {
+  const method = options.method || 'GET';
+  const endpoint = url.replace(BASE_URL, '');
+  
+  // Кэшированные мок-пользователи
   const mockUsers = [
     {
       id: 1,
@@ -102,18 +96,14 @@ const getMockResponse = (endpoint, options) => {
       wagon: '2',
       color: 'Красная куртка',
       colorCode: '#dc3545',
-      status: 'Стою у двери в вагоне | Хорошее настроение',
-      timer: "00:00",
+      status: 'На станции',
       online: true,
       city: 'spb',
       gender: 'female',
-      position: 'Стою у двери в вагоне',
-      mood: 'Хорошее настроение',
+      position: 'Стою у двери',
+      mood: 'Хорошее',
       is_waiting: false,
       is_connected: true,
-      session_id: 'session_metro_1',
-      device_id: 'device_1',
-      vk_user_id: null,
       last_seen: new Date().toISOString()
     },
     {
@@ -123,153 +113,178 @@ const getMockResponse = (endpoint, options) => {
       wagon: '5',
       color: 'Синяя куртка',
       colorCode: '#007bff',
-      status: 'Сижу читаю в вагоне | Просто наблюдаю',
-      timer: "00:00",
+      status: 'В вагоне',
       online: true,
       city: 'spb',
       gender: 'male',
-      position: 'Сижу читаю в вагоне',
-      mood: 'Просто наблюдаю',
+      position: 'Читаю',
+      mood: 'Сплю',
       is_waiting: false,
       is_connected: true,
-      session_id: 'session_metro_2',
-      device_id: 'device_2',
-      vk_user_id: null,
       last_seen: new Date().toISOString()
     }
   ];
 
   const stations = {
-    moscow: [
-      'Авиамоторная', 'Автозаводская', 'Академическая', 'Александровский сад', 'Алексеевская',
-      'Алтуфьево', 'Аннино', 'Арбатская', 'Аэропорт', 'Бабушкинская'
-    ],
-    spb: [
-      'Адмиралтейская', 'Балтийская', 'Василеостровская', 'Владимирская', 'Гостиный двор',
-      'Горьковская', 'Достоевская', 'Елизаровская', 'Звенигородская', 'Кировский завод'
-    ]
+    moscow: ['Авиамоторная', 'Автозаводская', 'Академическая'],
+    spb: ['Адмиралтейская', 'Балтийская', 'Василеостровская', 'Площадь Восстания', 'Пушкинская']
   };
 
-  switch (endpoint) {
-    case '/users':
-      if (options.method === 'POST') {
-        const newUser = {
-          id: Date.now(),
-          ...JSON.parse(options.body),
-          created_at: new Date().toISOString(),
-          last_seen: new Date().toISOString()
-        };
-        
-        // Добавляем цвет если его нет
-        if (!newUser.colorCode) {
-          const colors = ['#007bff', '#28a745', '#dc3545', '#ffc107', '#17a2b8'];
-          newUser.colorCode = colors[Math.floor(Math.random() * colors.length)];
-        }
-        
-        return newUser;
-      }
-      return mockUsers.filter(user => user.online);
-
-    case '/stations/waiting-room':
-      const url = new URL(`http://test.com${endpoint}`);
-      const city = url.searchParams.get('city') || 'spb';
-      const cityStations = stations[city] || stations.spb;
-      
-      const stationStats = cityStations.map(station => {
-        const stationUsers = mockUsers.filter(user => user.station === station && user.online);
-        const waiting = stationUsers.filter(user => user.is_waiting).length;
-        const connected = stationUsers.filter(user => user.is_connected).length;
-        
-        return {
-          station,
-          waiting,
-          connected,
-          totalUsers: stationUsers.length
-        };
-      });
-      
-      const total_waiting = stationStats.reduce((sum, stat) => sum + stat.waiting, 0);
-      const total_connected = stationStats.reduce((sum, stat) => sum + stat.connected, 0);
-      
-      return {
-        stationStats,
-        totalStats: {
-          total_waiting,
-          total_connected,
-          total_users: total_waiting + total_connected
-        }
-      };
-
-    case '/rooms/join-station':
-      const body = JSON.parse(options.body);
-      const stationUsers = mockUsers.filter(user => 
-        user.station === body.station && 
-        user.is_connected === true &&
-        user.online === true
-      );
-      
-      return {
-        success: true,
-        users: stationUsers
-      };
-
-    default:
-      if (endpoint.startsWith('/users/') && endpoint.endsWith('/ping')) {
-        return { success: true };
-      }
-      
-      if (endpoint.startsWith('/users/') && options.method === 'PUT') {
-        const userId = parseInt(endpoint.split('/')[2]);
-        const user = mockUsers.find(u => u.id === userId);
-        
-        if (user) {
-          const updateData = JSON.parse(options.body);
-          return { ...user, ...updateData, last_seen: new Date().toISOString() };
-        }
-        
-        return { success: false, error: 'Пользователь не найден' };
-      }
-      
-      return { success: true };
+  // GET /users
+  if (endpoint === '/users' && method === 'GET') {
+    return mockUsers.filter(u => u.online);
   }
+
+  // POST /users
+  if (endpoint === '/users' && method === 'POST') {
+    const body = JSON.parse(options.body);
+    return {
+      id: Date.now(),
+      ...body,
+      colorCode: body.colorCode || '#007bff',
+      created_at: new Date().toISOString(),
+      last_seen: new Date().toISOString()
+    };
+  }
+
+  // GET /stations/waiting-room
+  if (endpoint.startsWith('/stations/waiting-room')) {
+    const city = new URLSearchParams(endpoint.split('?')[1] || '').get('city') || 'spb';
+    const cityStations = stations[city] || stations.spb;
+    
+    const stats = cityStations.map(station => ({
+      station,
+      waiting: station === 'Площадь Восстания' ? 1 : 0,
+      connected: station === 'Пушкинская' ? 2 : 0
+    }));
+    
+    return {
+      stationStats: stats,
+      totalStats: {
+        waiting: 1,
+        connected: 2,
+        total: 3
+      }
+    };
+  }
+
+  // PUT /users/:id
+  if (endpoint.match(/^\/users\/\d+$/) && method === 'PUT') {
+    const body = JSON.parse(options.body);
+    return {
+      id: parseInt(endpoint.split('/')[2]),
+      ...body,
+      last_seen: new Date().toISOString()
+    };
+  }
+
+  // POST /users/:id/ping
+  if (endpoint.includes('/ping') && method === 'POST') {
+    return { success: true };
+  }
+
+  return null;
 };
 
-// API методы
+// API методы с кэшированием
 export const api = {
-  async getUsers() {
-    return queuedRequest('/users');
+  async getUsers(force = false) {
+    const now = Date.now();
+    if (!force && cache.users.data && now - cache.users.time < CACHE_TTL) {
+      return cache.users.data;
+    }
+    
+    try {
+      const data = await queuedFetch('/users');
+      cache.users = { data, time: now };
+      return data;
+    } catch (error) {
+      if (USE_MOCK_FALLBACK) {
+        const mock = getMockResponse('/users', { method: 'GET' });
+        cache.users = { data: mock, time: now };
+        return mock;
+      }
+      throw error;
+    }
   },
 
   async createUser(userData) {
-    return queuedRequest('/users', {
-      method: 'POST',
-      body: userData
-    });
+    try {
+      const data = await queuedFetch('/users', {
+        method: 'POST',
+        body: userData
+      });
+      cache.users.time = 0; // Инвалидируем кэш
+      return data;
+    } catch (error) {
+      if (USE_MOCK_FALLBACK) {
+        return getMockResponse('/users', { method: 'POST', body: JSON.stringify(userData) });
+      }
+      throw error;
+    }
   },
 
   async updateUser(userId, updateData) {
-    return queuedRequest(`/users/${userId}`, {
-      method: 'PUT',
-      body: updateData
-    });
+    try {
+      const data = await queuedFetch(`/users/${userId}`, {
+        method: 'PUT',
+        body: updateData
+      });
+      cache.users.time = 0; // Инвалидируем кэш
+      return data;
+    } catch (error) {
+      if (USE_MOCK_FALLBACK) {
+        return { id: userId, ...updateData };
+      }
+      throw error;
+    }
   },
 
   async pingActivity(userId, updateData = {}) {
-    return queuedRequest(`/users/${userId}/ping`, {
-      method: 'POST',
-      body: updateData
-    });
+    try {
+      return await queuedFetch(`/users/${userId}/ping`, {
+        method: 'POST',
+        body: updateData
+      });
+    } catch (error) {
+      return { success: true }; // Всегда успех при ошибке
+    }
   },
 
-  async getStationsStats(city = 'spb') {
-    return queuedRequest(`/stations/waiting-room?city=${city}`);
+  async getStationsStats(city = 'spb', force = false) {
+    const now = Date.now();
+    const cacheKey = `stats_${city}`;
+    
+    if (!force && cache.stats.data && now - cache.stats.time < CACHE_TTL) {
+      return cache.stats.data;
+    }
+    
+    try {
+      const data = await queuedFetch(`/stations/waiting-room?city=${city}`);
+      cache.stats = { data, time: now };
+      return data;
+    } catch (error) {
+      if (USE_MOCK_FALLBACK) {
+        const mock = getMockResponse(`/stations/waiting-room?city=${city}`, { method: 'GET' });
+        cache.stats = { data: mock, time: now };
+        return mock;
+      }
+      throw error;
+    }
   },
 
   async joinStation(data) {
-    return queuedRequest('/rooms/join-station', {
-      method: 'POST',
-      body: data
-    });
+    try {
+      return await queuedFetch('/rooms/join-station', {
+        method: 'POST',
+        body: data
+      });
+    } catch (error) {
+      if (USE_MOCK_FALLBACK) {
+        return { success: true, users: [] };
+      }
+      throw error;
+    }
   }
 };
 
@@ -296,16 +311,7 @@ export const helpers = {
   },
   
   getRandomColor() {
-    const colors = [
-      '#007bff', '#28a745', '#dc3545', '#ffc107', '#17a2b8',
-      '#6f42c1', '#e83e8c', '#fd7e14', '#20c997', '#6610f2'
-    ];
+    const colors = ['#007bff', '#28a745', '#dc3545', '#ffc107', '#17a2b8'];
     return colors[Math.floor(Math.random() * colors.length)];
   }
 };
-
-// Экспорт для отладки
-if (process.env.NODE_ENV === 'development') {
-  window.api = api;
-  window.helpers = helpers;
-}

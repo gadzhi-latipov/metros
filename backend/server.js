@@ -4,56 +4,92 @@ import cors from 'cors';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
+// Оптимизированные middleware
 app.use(cors({
   origin: [
     'https://frommetro.vercel.app',
     'https://metros-git-main-ruslans-projects-c1667076.vercel.app',
     'https://metros-ruslans-projects-c1667076.vercel.app',
-    'http://localhost:3000', 
+    'http://localhost:3000',
     'http://localhost:5173',
     'https://vk.com',
     'https://vk-apps.com'
   ],
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  maxAge: 86400 // Кэширование preflight на 24 часа
 }));
 
-app.use(express.json());
+app.use(express.json({ limit: '10kb' })); // Ограничение размера
 
-// Оптимизированное хранение пользователей в памяти
-let mockUsers = [
-  {
+// Оптимизированное хранение (Map для O(1) доступа)
+const users = new Map();
+const usersByDevice = new Map();
+const usersBySession = new Map();
+
+// Добавляем тестовых пользователей
+const initData = () => {
+  const testUser1 = {
     id: 1,
     name: 'Анна',
     station: 'Площадь Восстания',
     wagon: '2',
     color: 'Красная куртка',
     colorCode: '#dc3545',
-    status: 'Стою у двери в вагоне | Хорошее настроение',
-    timer: "00:00",
+    status: 'На станции',
     online: true,
     city: 'spb',
     gender: 'female',
-    position: 'Стою у двери в вагоне',
-    mood: 'Хорошее настроение',
+    position: 'Стою у двери',
+    mood: 'Хорошее',
     is_waiting: false,
     is_connected: true,
-    session_id: 'session_metro_1',
+    session_id: 'session_1',
     device_id: 'device_1',
-    vk_user_id: null,
     last_seen: new Date().toISOString(),
     created_at: new Date().toISOString()
-  }
-];
+  };
+  
+  const testUser2 = {
+    id: 2,
+    name: 'Михаил',
+    station: 'Пушкинская',
+    wagon: '5',
+    color: 'Синяя куртка',
+    colorCode: '#007bff',
+    status: 'В вагоне',
+    online: true,
+    city: 'spb',
+    gender: 'male',
+    position: 'Читаю',
+    mood: 'Сплю',
+    is_waiting: false,
+    is_connected: true,
+    session_id: 'session_2',
+    device_id: 'device_2',
+    last_seen: new Date().toISOString(),
+    created_at: new Date().toISOString()
+  };
+  
+  users.set(1, testUser1);
+  users.set(2, testUser2);
+  usersByDevice.set('device_1', 1);
+  usersByDevice.set('device_2', 2);
+  usersBySession.set('session_1', 1);
+  usersBySession.set('session_2', 2);
+};
 
-// Кэш для оптимизации
-let stationCache = {};
-let lastCacheUpdate = 0;
+initData();
+
+// Кэш статистики
+let statsCache = {
+  moscow: { data: null, time: 0 },
+  spb: { data: null, time: 0 }
+};
+
 const CACHE_TTL = 5000; // 5 секунд
+const INACTIVE_TIMEOUT = 300000; // 5 минут
 
-// Список станций
+// Станции
 const stations = {
   moscow: [
     'Авиамоторная', 'Автозаводская', 'Академическая', 'Александровский сад', 'Алексеевская',
@@ -75,280 +111,198 @@ const stations = {
   ]
 };
 
-// Очистка неактивных пользователей
-const cleanupInactiveUsers = () => {
-  const now = new Date();
-  const inactiveTime = new Date(now.getTime() - 5 * 60 * 1000); // 5 минут
-  
-  let cleaned = false;
-  
-  mockUsers = mockUsers.map(user => {
-    const lastSeen = new Date(user.last_seen || user.created_at || 0);
-    if (lastSeen < inactiveTime && user.online) {
-      cleaned = true;
-      return {
-        ...user,
-        online: false,
-        is_connected: false,
-        is_waiting: false,
-        status: 'Оффлайн (неактивность)'
-      };
-    }
-    return user;
-  });
-  
-  if (cleaned) {
-    stationCache = {}; // Инвалидируем кэш
-  }
-};
-
-// Запускаем очистку каждую минуту
-setInterval(cleanupInactiveUsers, 60000);
-
-// Оптимизированная функция для получения статистики станций
-const getStationStats = (city) => {
+// Быстрое вычисление статистики (один проход)
+const calculateStats = (city) => {
   const now = Date.now();
+  const cacheKey = city;
   
-  // Проверяем кэш
-  const cacheKey = `stats_${city}`;
-  if (stationCache[cacheKey] && (now - lastCacheUpdate) < CACHE_TTL) {
-    return stationCache[cacheKey];
+  // Проверка кэша
+  if (statsCache[cacheKey].data && now - statsCache[cacheKey].time < CACHE_TTL) {
+    return statsCache[cacheKey].data;
   }
   
   const cityStations = stations[city] || stations.spb;
-  const stationStats = [];
-  let total_waiting = 0;
-  let total_connected = 0;
+  const stats = {};
   
-  // Быстрый подсчет статистики
+  // Инициализация
   for (const station of cityStations) {
-    let waiting = 0;
-    let connected = 0;
-    let totalUsers = 0;
+    stats[station] = { station, waiting: 0, connected: 0 };
+  }
+  
+  let totalWaiting = 0;
+  let totalConnected = 0;
+  
+  // Один проход по пользователям
+  for (const user of users.values()) {
+    if (!user.online) continue;
     
-    for (const user of mockUsers) {
-      if (!user.online) continue;
-      if (user.station !== station) continue;
-      
-      totalUsers++;
-      if (user.is_waiting && !user.is_connected) {
-        waiting++;
-        total_waiting++;
-      } else if (user.is_connected) {
-        connected++;
-        total_connected++;
-      }
+    if (user.is_waiting && !user.is_connected) {
+      totalWaiting++;
+    } else if (user.is_connected && user.station) {
+      totalConnected++;
+      const stationStat = stats[user.station];
+      if (stationStat) stationStat.connected++;
     }
-    
-    stationStats.push({
-      station,
-      waiting,
-      connected,
-      totalUsers
-    });
   }
   
   const result = {
-    stationStats,
+    stationStats: Object.values(stats),
     totalStats: {
-      total_waiting,
-      total_connected, 
-      total_users: total_waiting + total_connected
+      waiting: totalWaiting,
+      connected: totalConnected,
+      total: totalWaiting + totalConnected
     }
   };
   
   // Сохраняем в кэш
-  stationCache[cacheKey] = result;
-  lastCacheUpdate = now;
+  statsCache[cacheKey] = { data: result, time: now };
   
   return result;
 };
 
-// Middleware для логирования
-app.use((req, res, next) => {
-  const start = Date.now();
-  res.on('finish', () => {
-    const duration = Date.now() - start;
-    console.log(`${req.method} ${req.path} - ${res.statusCode} - ${duration}ms`);
-  });
-  next();
-});
+// Очистка неактивных (запускаем раз в минуту)
+setInterval(() => {
+  const now = Date.now();
+  let changed = false;
+  
+  for (const [id, user] of users.entries()) {
+    if (!user.online) continue;
+    
+    const lastSeen = new Date(user.last_seen || user.created_at || 0).getTime();
+    if (now - lastSeen > INACTIVE_TIMEOUT) {
+      user.online = false;
+      user.is_connected = false;
+      user.is_waiting = false;
+      changed = true;
+    }
+  }
+  
+  if (changed) {
+    // Инвалидируем кэш
+    statsCache.moscow.time = 0;
+    statsCache.spb.time = 0;
+  }
+}, 60000);
 
-// API Routes
+// Middleware логирования (только в development)
+if (process.env.NODE_ENV === 'development') {
+  app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+      console.log(`${req.method} ${req.path} - ${Date.now() - start}ms`);
+    });
+    next();
+  });
+}
+
+// ========== API ROUTES ==========
+
+// Быстрый GET /api/users
 app.get('/api/users', (req, res) => {
-  const onlineUsers = mockUsers.filter(user => user.online === true);
+  const onlineUsers = [];
+  for (const user of users.values()) {
+    if (user.online) onlineUsers.push(user);
+  }
   res.json(onlineUsers);
 });
 
+// Быстрый POST /api/users
 app.post('/api/users', (req, res) => {
-  try {
-    const userData = req.body;
-    
-    // Валидация
-    if (!userData.name || !userData.device_id) {
-      return res.status(400).json({ 
-        error: 'Необходимые поля: name, device_id' 
-      });
-    }
-    
-    // Очищаем старые сессии с того же устройства
-    mockUsers = mockUsers.map(user => {
-      if (user.device_id === userData.device_id && user.online === true) {
-        return {
-          ...user,
-          online: false,
-          is_connected: false,
-          is_waiting: false,
-          status: 'Сессия заменена'
-        };
-      }
-      return user;
-    });
-    
-    const newUser = {
-      id: Date.now(),
-      created_at: new Date().toISOString(),
-      last_seen: new Date().toISOString(),
-      online: true,
-      ...userData
-    };
-    
-    // Устанавливаем значения по умолчанию
-    if (!newUser.colorCode) {
-      const colors = ['#007bff', '#28a745', '#dc3545', '#ffc107', '#17a2b8'];
-      newUser.colorCode = colors[Math.floor(Math.random() * colors.length)];
-    }
-    
-    if (newUser.is_waiting === undefined) newUser.is_waiting = true;
-    if (newUser.is_connected === undefined) newUser.is_connected = false;
-    
-    mockUsers.push(newUser);
-    
-    // Инвалидируем кэш
-    stationCache = {};
-    
-    res.status(201).json(newUser);
-  } catch (error) {
-    res.status(500).json({ error: 'Ошибка создания пользователя' });
+  const userData = req.body;
+  
+  if (!userData.name || !userData.device_id) {
+    return res.status(400).json({ error: 'Missing fields' });
   }
+  
+  // Деактивируем старую сессию по device_id
+  const existingId = usersByDevice.get(userData.device_id);
+  if (existingId) {
+    const existing = users.get(existingId);
+    if (existing) {
+      existing.online = false;
+    }
+  }
+  
+  const newUser = {
+    id: Date.now(),
+    created_at: new Date().toISOString(),
+    last_seen: new Date().toISOString(),
+    online: true,
+    colorCode: userData.colorCode || ['#007bff', '#28a745', '#dc3545', '#ffc107', '#17a2b8'][Math.floor(Math.random() * 5)],
+    ...userData
+  };
+  
+  users.set(newUser.id, newUser);
+  usersByDevice.set(userData.device_id, newUser.id);
+  if (userData.session_id) {
+    usersBySession.set(userData.session_id, newUser.id);
+  }
+  
+  // Инвалидируем кэш
+  statsCache.moscow.time = 0;
+  statsCache.spb.time = 0;
+  
+  res.status(201).json(newUser);
 });
 
+// Быстрый GET /api/stations/waiting-room
 app.get('/api/stations/waiting-room', (req, res) => {
   const city = req.query.city || 'spb';
-  const stats = getStationStats(city);
+  const stats = calculateStats(city);
   res.json(stats);
 });
 
-app.post('/api/users/:id/ping', (req, res) => {
-  try {
-    const userId = parseInt(req.params.id);
-    const userIndex = mockUsers.findIndex(user => user.id === userId);
-    
-    if (userIndex === -1) {
-      return res.status(404).json({ error: 'Пользователь не найден' });
-    }
-    
-    mockUsers[userIndex].last_seen = new Date().toISOString();
-    
-    // Обновляем статус если переданы данные
-    if (req.body && Object.keys(req.body).length > 0) {
-      mockUsers[userIndex] = { 
-        ...mockUsers[userIndex], 
-        ...req.body 
-      };
-    }
-    
-    // Инвалидируем кэш если данные изменились
-    if (req.body && (req.body.station || req.body.is_connected || req.body.is_waiting)) {
-      stationCache = {};
-    }
-    
-    res.json({ 
-      success: true, 
-      user: mockUsers[userIndex] 
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Ошибка обновления статуса' });
-  }
-});
-
+// Быстрый PUT /api/users/:id
 app.put('/api/users/:id', (req, res) => {
-  try {
-    const userId = parseInt(req.params.id);
-    const userIndex = mockUsers.findIndex(user => user.id === userId);
-    
-    if (userIndex === -1) {
-      return res.status(404).json({ error: 'Пользователь не найден' });
-    }
-    
-    const updateData = req.body;
-    
-    // Проверяем, нужно ли инвалидировать кэш
-    const shouldInvalidateCache = 
-      updateData.station !== undefined || 
-      updateData.is_connected !== undefined || 
-      updateData.is_waiting !== undefined;
-    
-    // Обновляем пользователя
-    mockUsers[userIndex] = { 
-      ...mockUsers[userIndex], 
-      ...updateData,
-      last_seen: new Date().toISOString()
-    };
-    
-    if (shouldInvalidateCache) {
-      stationCache = {};
-    }
-    
-    res.json(mockUsers[userIndex]);
-  } catch (error) {
-    res.status(500).json({ error: 'Ошибка обновления пользователя' });
+  const userId = parseInt(req.params.id);
+  const user = users.get(userId);
+  
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
   }
+  
+  const updateData = req.body;
+  
+  // Обновляем
+  Object.assign(user, updateData);
+  user.last_seen = new Date().toISOString();
+  
+  // Обновляем индексы если нужно
+  if (updateData.device_id) {
+    usersByDevice.set(updateData.device_id, userId);
+  }
+  if (updateData.session_id) {
+    usersBySession.set(updateData.session_id, userId);
+  }
+  
+  // Инвалидируем кэш если изменились важные поля
+  if (updateData.station !== undefined || 
+      updateData.is_connected !== undefined || 
+      updateData.is_waiting !== undefined ||
+      updateData.online !== undefined) {
+    statsCache.moscow.time = 0;
+    statsCache.spb.time = 0;
+  }
+  
+  res.json(user);
 });
 
-app.post('/api/rooms/join-station', (req, res) => {
-  try {
-    const { station, userId } = req.body;
-    
-    if (!station || !userId) {
-      return res.status(400).json({ 
-        error: 'Необходимые поля: station, userId' 
-      });
-    }
-    
-    const userIndex = mockUsers.findIndex(user => user.id === parseInt(userId));
-    
-    if (userIndex === -1) {
-      return res.status(404).json({ error: 'Пользователь не найден' });
-    }
-    
-    // Обновляем пользователя
-    mockUsers[userIndex] = {
-      ...mockUsers[userIndex],
-      station,
-      is_waiting: false,
-      is_connected: true,
-      status: `Выбрал станцию: ${station}`,
-      last_seen: new Date().toISOString()
-    };
-    
-    // Возвращаем всех пользователей на этой станции
-    const stationUsers = mockUsers.filter(user => 
-      user.station === station && 
-      user.is_connected === true &&
-      user.online === true
-    );
-    
-    // Инвалидируем кэш
-    stationCache = {};
-    
-    res.json({ 
-      success: true,
-      users: stationUsers
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Ошибка присоединения к станции' });
+// Быстрый POST /api/users/:id/ping
+app.post('/api/users/:id/ping', (req, res) => {
+  const userId = parseInt(req.params.id);
+  const user = users.get(userId);
+  
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
   }
+  
+  user.last_seen = new Date().toISOString();
+  
+  if (req.body && Object.keys(req.body).length > 0) {
+    Object.assign(user, req.body);
+  }
+  
+  res.json({ success: true });
 });
 
 // Health check
@@ -357,45 +311,21 @@ app.get('/healthz', (req, res) => {
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
+  res.json({
+    status: 'OK',
     timestamp: new Date().toISOString(),
-    users: {
-      total: mockUsers.length,
-      online: mockUsers.filter(u => u.online).length,
-      connected: mockUsers.filter(u => u.is_connected).length,
-      waiting: mockUsers.filter(u => u.is_waiting).length
-    },
-    cache: {
-      status: Object.keys(stationCache).length > 0 ? 'active' : 'empty',
-      stations: Object.keys(stations).length
+    stats: {
+      users: users.size,
+      online: Array.from(users.values()).filter(u => u.online).length
     }
   });
 });
 
-// Обработка OPTIONS запросов для CORS
-app.options('*', (req, res) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.sendStatus(200);
-});
-
-// Обработка 404
+// 404
 app.use((req, res) => {
-  res.status(404).json({ error: 'Маршрут не найден' });
-});
-
-// Обработка ошибок
-app.use((err, req, res, next) => {
-  console.error('Ошибка сервера:', err);
-  res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  res.status(404).json({ error: 'Not found' });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Сервер запущен на порту ${PORT}`);
-  console.log(`🌐 CORS включен для VK Mini Apps`);
-  console.log(`💾 Кэш статистики: активен (TTL: ${CACHE_TTL}ms)`);
-  console.log(`👥 Пользователей в памяти: ${mockUsers.length}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
