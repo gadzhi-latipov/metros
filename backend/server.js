@@ -6,21 +6,26 @@ const PORT = process.env.PORT || 3001;
 
 // Middleware
 app.use(cors({
-  origin: [
-    'https://frommetro.vercel.app',
-    'https://metros-git-main-ruslans-projects-c1667076.vercel.app',
-    'https://metros-ruslans-projects-c1667076.vercel.app',
-    'http://localhost:3000', 
-    'http://localhost:5173',
-    'https://vk.com',
-    'https://vk-apps.com'
-  ],
+  origin: true, // Временно разрешаем все источники для теста
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept']
 }));
 
 app.use(express.json());
+
+// Добавьте этот middleware для отладки CORS
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Origin, Accept');
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 // Оптимизированное хранение пользователей в памяти
 let mockUsers = [
