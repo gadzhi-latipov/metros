@@ -3,11 +3,17 @@
 const BASE_URL = 'https://metro-backend-xlkt.onrender.com/api';
 const USE_MOCK_DATA = false; // Переключите на true для разработки без бэкенда
 
+// Кэш в памяти для быстрого доступа
+let usersCache = null;
+let usersCacheTime = 0;
+let statsCache = {};
+const CACHE_TTL = 2000; // 2 секунды кэширования
+
 // Очередь запросов для предотвращения спама
 let requestQueue = [];
 let isProcessing = false;
 let lastRequestTime = 0;
-const REQUEST_DELAY = 1000; // 1 секунда между запросами
+const REQUEST_DELAY = 100; // 100ms между запросами (уменьшили для скорости)
 
 // Обработка очереди запросов
 const processQueue = async () => {
@@ -30,7 +36,7 @@ const processQueue = async () => {
     
     if (USE_MOCK_DATA) {
       // Используем мок данные
-      await new Promise(resolve => setTimeout(resolve, 200)); // Имитация задержки
+      await new Promise(resolve => setTimeout(resolve, 50)); // Минимальная задержка
       const mockResponse = getMockResponse(request.endpoint, request.options);
       request.resolve(mockResponse);
     } else {
@@ -58,7 +64,7 @@ const processQueue = async () => {
   } finally {
     isProcessing = false;
     if (requestQueue.length > 0) {
-      setTimeout(processQueue, 100);
+      setTimeout(processQueue, 50);
     }
   }
 };
@@ -142,16 +148,25 @@ const getMockResponse = (endpoint, options) => {
   const stations = {
     moscow: [
       'Авиамоторная', 'Автозаводская', 'Академическая', 'Александровский сад', 'Алексеевская',
-      'Алтуфьево', 'Аннино', 'Арбатская', 'Аэропорт', 'Бабушкинская'
+      'Алтуфьево', 'Аннино', 'Арбатская', 'Аэропорт', 'Бабушкинская',
+      'Багратионовская', 'Баррикадная', 'Бауманская', 'Беговая', 'Белорусская',
+      'Беляево', 'Бибирево', 'Библиотека им. Ленина', 'Боровицкая', 'Ботанический сад'
     ],
     spb: [
       'Адмиралтейская', 'Балтийская', 'Василеостровская', 'Владимирская', 'Гостиный двор',
-      'Горьковская', 'Достоевская', 'Елизаровская', 'Звенигородская', 'Кировский завод'
+      'Горьковская', 'Достоевская', 'Елизаровская', 'Звенигородская', 'Кировский завод',
+      'Ладожская', 'Лиговский проспект', 'Ломоносовская', 'Маяковская', 'Невский проспект',
+      'Обводный канал', 'Озерки', 'Парк Победы', 'Петроградская', 'Площадь Восстания',
+      'Площадь Ленина', 'Приморская', 'Пролетарская', 'Проспект Ветеранов', 'Проспект Просвещения',
+      'Пушкинская', 'Садовая', 'Сенная площадь', 'Спасская', 'Спортивная'
     ]
   };
 
   switch (endpoint) {
     case '/users':
+      if (options.method === 'GET') {
+        return mockUsers.filter(user => user.online);
+      }
       if (options.method === 'POST') {
         const newUser = {
           id: Date.now(),
@@ -168,7 +183,7 @@ const getMockResponse = (endpoint, options) => {
         
         return newUser;
       }
-      return mockUsers.filter(user => user.online);
+      return mockUsers;
 
     case '/stations/waiting-room':
       const url = new URL(`http://test.com${endpoint}`);
@@ -214,6 +229,16 @@ const getMockResponse = (endpoint, options) => {
       };
 
     default:
+      // Обработка динамических endpoint'ов
+      if (endpoint.startsWith('/stations/') && endpoint.endsWith('/users')) {
+        // Эндпоинт для получения пользователей станции
+        return mockUsers.filter(user => 
+          user.station === decodeURIComponent(endpoint.split('/')[2]) && 
+          user.is_connected === true &&
+          user.online === true
+        );
+      }
+      
       if (endpoint.startsWith('/users/') && endpoint.endsWith('/ping')) {
         return { success: true };
       }
@@ -236,24 +261,46 @@ const getMockResponse = (endpoint, options) => {
 
 // API методы
 export const api = {
-  async getUsers() {
-    return queuedRequest('/users');
+  // Получение всех пользователей (с кэшированием)
+  async getUsers(force = false) {
+    const now = Date.now();
+    
+    // Возвращаем из кэша если данные свежие
+    if (!force && usersCache && (now - usersCacheTime) < CACHE_TTL) {
+      return usersCache;
+    }
+    
+    const data = await queuedRequest('/users');
+    usersCache = data;
+    usersCacheTime = now;
+    return data;
   },
 
+  // Создание нового пользователя
   async createUser(userData) {
-    return queuedRequest('/users', {
+    const data = await queuedRequest('/users', {
       method: 'POST',
       body: userData
     });
+    // Инвалидируем кэш
+    usersCache = null;
+    statsCache = {};
+    return data;
   },
 
+  // Обновление пользователя
   async updateUser(userId, updateData) {
-    return queuedRequest(`/users/${userId}`, {
+    const data = await queuedRequest(`/users/${userId}`, {
       method: 'PUT',
       body: updateData
     });
+    // Инвалидируем кэш
+    usersCache = null;
+    statsCache = {};
+    return data;
   },
 
+  // Ping активности
   async pingActivity(userId, updateData = {}) {
     return queuedRequest(`/users/${userId}/ping`, {
       method: 'POST',
@@ -261,15 +308,40 @@ export const api = {
     });
   },
 
-  async getStationsStats(city = 'spb') {
-    return queuedRequest(`/stations/waiting-room?city=${city}`);
+  // Получение статистики станций (с кэшированием)
+  async getStationsStats(city = 'spb', force = false) {
+    const cacheKey = `stats_${city}`;
+    const now = Date.now();
+    
+    // Возвращаем из кэша если данные свежие
+    if (!force && statsCache[cacheKey] && (now - statsCache[cacheKey].time) < CACHE_TTL) {
+      return statsCache[cacheKey].data;
+    }
+    
+    const data = await queuedRequest(`/stations/waiting-room?city=${city}`);
+    statsCache[cacheKey] = {
+      data,
+      time: now
+    };
+    return data;
   },
 
+  // НОВЫЙ ОПТИМИЗИРОВАННЫЙ МЕТОД: получение пользователей конкретной станции
+  async getStationUsers(station) {
+    const encodedStation = encodeURIComponent(station);
+    return queuedRequest(`/stations/${encodedStation}/users`);
+  },
+
+  // Присоединение к станции
   async joinStation(data) {
-    return queuedRequest('/rooms/join-station', {
+    const result = await queuedRequest('/rooms/join-station', {
       method: 'POST',
       body: data
     });
+    // Инвалидируем кэш
+    usersCache = null;
+    statsCache = {};
+    return result;
   }
 };
 
