@@ -3,11 +3,17 @@
 const BASE_URL = 'https://metro-backend-xlkt.onrender.com/api';
 const USE_MOCK_DATA = false; // Переключите на true для разработки без бэкенда
 
+// Кэш в памяти для быстрого доступа
+let usersCache = null;
+let usersCacheTime = 0;
+let statsCache = {};
+const CACHE_TTL = 2000; // 2 секунды кэширования
+
 // Очередь запросов для предотвращения спама
 let requestQueue = [];
 let isProcessing = false;
 let lastRequestTime = 0;
-const REQUEST_DELAY = 1000; // 1 секунда между запросами
+const REQUEST_DELAY = 100; // 100ms между запросами (уменьшили для скорости)
 
 // Обработка очереди запросов
 const processQueue = async () => {
@@ -30,7 +36,7 @@ const processQueue = async () => {
     
     if (USE_MOCK_DATA) {
       // Используем мок данные
-      await new Promise(resolve => setTimeout(resolve, 200)); // Имитация задержки
+      await new Promise(resolve => setTimeout(resolve, 50)); // Минимальная задержка
       const mockResponse = getMockResponse(request.endpoint, request.options);
       request.resolve(mockResponse);
     } else {
@@ -45,20 +51,26 @@ const processQueue = async () => {
       request.resolve(data);
     }
   } catch (error) {
-    // При ошибке используем мок данные как fallback
     console.warn(`API Error [${request.options.method} ${request.endpoint}]:`, error.message);
-    console.log('🔄 Используем fallback мок данные');
     
-    try {
-      const mockResponse = getMockResponse(request.endpoint, request.options);
-      request.resolve(mockResponse);
-    } catch (mockError) {
-      request.reject(error);
+    // При ошибке 404 для станций, возвращаем пустой массив (нет пользователей)
+    if (error.message.includes('HTTP 404') && request.endpoint.includes('/stations/')) {
+      console.log(`📭 Станция не найдена или нет пользователей, возвращаем пустой массив`);
+      request.resolve([]);
+    } else {
+      // В остальных случаях используем мок данные
+      console.log('🔄 Используем fallback мок данные');
+      try {
+        const mockResponse = getMockResponse(request.endpoint, request.options);
+        request.resolve(mockResponse);
+      } catch (mockError) {
+        request.reject(error);
+      }
     }
   } finally {
     isProcessing = false;
     if (requestQueue.length > 0) {
-      setTimeout(processQueue, 100);
+      setTimeout(processQueue, 50);
     }
   }
 };
@@ -136,6 +148,26 @@ const getMockResponse = (endpoint, options) => {
       device_id: 'device_2',
       vk_user_id: null,
       last_seen: new Date().toISOString()
+    },
+    {
+      id: 3,
+      name: 'Елена',
+      station: 'Василеостровская',
+      wagon: '3',
+      color: 'Синее пальто',
+      colorCode: '#17a2b8',
+      status: 'Брожу по станции | Хорошее настроение',
+      online: true,
+      city: 'spb',
+      gender: 'female',
+      position: 'Брожу по станции',
+      mood: 'Хорошее настроение',
+      is_waiting: false,
+      is_connected: true,
+      session_id: 'session_metro_3',
+      device_id: 'device_3',
+      vk_user_id: null,
+      last_seen: new Date().toISOString()
     }
   ];
 
@@ -146,12 +178,35 @@ const getMockResponse = (endpoint, options) => {
     ],
     spb: [
       'Адмиралтейская', 'Балтийская', 'Василеостровская', 'Владимирская', 'Гостиный двор',
-      'Горьковская', 'Достоевская', 'Елизаровская', 'Звенигородская', 'Кировский завод'
+      'Горьковская', 'Достоевская', 'Елизаровская', 'Звенигородская', 'Кировский завод',
+      'Ладожская', 'Лиговский проспект', 'Ломоносовская', 'Маяковская', 'Невский проспект',
+      'Обводный канал', 'Озерки', 'Парк Победы', 'Петроградская', 'Площадь Восстания',
+      'Площадь Ленина', 'Приморская', 'Пролетарская', 'Проспект Ветеранов', 'Проспект Просвещения',
+      'Пушкинская', 'Садовая', 'Сенная площадь', 'Спасская', 'Спортивная'
     ]
   };
 
+  // Обработка динамических endpoint'ов
+  if (endpoint.match(/^\/stations\/.+\/users$/)) {
+    // Эндпоинт для получения пользователей станции
+    const station = decodeURIComponent(endpoint.split('/')[2]);
+    console.log(`📡 Мок: запрос пользователей для станции ${station}`);
+    
+    // Фильтруем пользователей по станции
+    const stationUsers = mockUsers.filter(user => 
+      user.station === station && 
+      user.is_connected === true &&
+      user.online === true
+    );
+    
+    return stationUsers;
+  }
+
   switch (endpoint) {
     case '/users':
+      if (options.method === 'GET') {
+        return mockUsers.filter(user => user.online);
+      }
       if (options.method === 'POST') {
         const newUser = {
           id: Date.now(),
@@ -168,7 +223,7 @@ const getMockResponse = (endpoint, options) => {
         
         return newUser;
       }
-      return mockUsers.filter(user => user.online);
+      return mockUsers;
 
     case '/stations/waiting-room':
       const url = new URL(`http://test.com${endpoint}`);
@@ -236,24 +291,46 @@ const getMockResponse = (endpoint, options) => {
 
 // API методы
 export const api = {
-  async getUsers() {
-    return queuedRequest('/users');
+  // Получение всех пользователей (с кэшированием)
+  async getUsers(force = false) {
+    const now = Date.now();
+    
+    // Возвращаем из кэша если данные свежие
+    if (!force && usersCache && (now - usersCacheTime) < CACHE_TTL) {
+      return usersCache;
+    }
+    
+    const data = await queuedRequest('/users');
+    usersCache = data;
+    usersCacheTime = now;
+    return data;
   },
 
+  // Создание нового пользователя
   async createUser(userData) {
-    return queuedRequest('/users', {
+    const data = await queuedRequest('/users', {
       method: 'POST',
       body: userData
     });
+    // Инвалидируем кэш
+    usersCache = null;
+    statsCache = {};
+    return data;
   },
 
+  // Обновление пользователя
   async updateUser(userId, updateData) {
-    return queuedRequest(`/users/${userId}`, {
+    const data = await queuedRequest(`/users/${userId}`, {
       method: 'PUT',
       body: updateData
     });
+    // Инвалидируем кэш
+    usersCache = null;
+    statsCache = {};
+    return data;
   },
 
+  // Ping активности
   async pingActivity(userId, updateData = {}) {
     return queuedRequest(`/users/${userId}/ping`, {
       method: 'POST',
@@ -261,15 +338,46 @@ export const api = {
     });
   },
 
-  async getStationsStats(city = 'spb') {
-    return queuedRequest(`/stations/waiting-room?city=${city}`);
+  // Получение статистики станций (с кэшированием)
+  async getStationsStats(city = 'spb', force = false) {
+    const cacheKey = `stats_${city}`;
+    const now = Date.now();
+    
+    // Возвращаем из кэша если данные свежие
+    if (!force && statsCache[cacheKey] && (now - statsCache[cacheKey].time) < CACHE_TTL) {
+      return statsCache[cacheKey].data;
+    }
+    
+    const data = await queuedRequest(`/stations/waiting-room?city=${city}`);
+    statsCache[cacheKey] = {
+      data,
+      time: now
+    };
+    return data;
   },
 
+  // НОВЫЙ ОПТИМИЗИРОВАННЫЙ МЕТОД: получение пользователей конкретной станции
+  async getStationUsers(station) {
+    try {
+      const encodedStation = encodeURIComponent(station);
+      const data = await queuedRequest(`/stations/${encodedStation}/users`);
+      return data || []; // Всегда возвращаем массив
+    } catch (error) {
+      console.warn(`Error getting users for station ${station}:`, error);
+      return []; // При ошибке возвращаем пустой массив
+    }
+  },
+
+  // Присоединение к станции
   async joinStation(data) {
-    return queuedRequest('/rooms/join-station', {
+    const result = await queuedRequest('/rooms/join-station', {
       method: 'POST',
       body: data
     });
+    // Инвалидируем кэш
+    usersCache = null;
+    statsCache = {};
+    return result;
   }
 };
 
