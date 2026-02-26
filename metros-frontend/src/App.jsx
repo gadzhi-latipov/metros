@@ -88,7 +88,7 @@ const generateDeviceId = () => {
   
   if (!deviceId) {
     const timestamp = Date.now();
-    const randomStr = Math.random().toString(36).substring(2, 10);
+    const randomStr = Math.random().toString(36).substr(2, 8);
     deviceId = `metro_${timestamp}_${randomStr}`;
     // Сохраним асинхронно позже
     setTimeout(() => saveToVKStorage(STORAGE_KEYS.DEVICE_ID, deviceId), 100);
@@ -233,7 +233,6 @@ export const App = () => {
   const statsCacheRef = useRef(null);
   const pendingUpdatesRef = useRef({});
   const updateTimeoutRef = useRef(null);
-  const loadAttemptsRef = useRef(0);
 
   // ==================== БЫСТРАЯ ЗАГРУЗКА ИЗ VKSTORAGE ====================
   useEffect(() => {
@@ -428,7 +427,6 @@ export const App = () => {
       setStationsData(stats);
       return stats;
     } catch (error) {
-      console.warn('Load stats error:', error);
       if (statsCacheRef.current) {
         setStationsData(statsCacheRef.current.data);
         return statsCacheRef.current.data;
@@ -446,29 +444,22 @@ export const App = () => {
     }
     
     try {
-      // Используем новый оптимизированный endpoint
-      const users = await api.getStationUsers(targetStation);
-      setGroupMembers(users);
-    } catch (error) {
-      console.warn('Load members error:', error);
-      // Fallback на старый метод
-      try {
-        const allUsers = await api.getUsers();
-        const groupUsers = [];
-        
-        for (let i = 0; i < allUsers.length; i++) {
-          const user = allUsers[i];
-          if (user.station === targetStation && 
-              user.is_connected === true &&
-              user.online === true) {
-            groupUsers.push(user);
-          }
+      const users = await api.getUsers();
+      const groupUsers = [];
+      
+      // Оптимизированный цикл
+      for (let i = 0; i < users.length; i++) {
+        const user = users[i];
+        if (user.station === targetStation && 
+            user.is_connected === true &&
+            user.online === true) {
+          groupUsers.push(user);
         }
-        
-        setGroupMembers(groupUsers);
-      } catch (e) {
-        // Тихая ошибка
       }
+      
+      setGroupMembers(groupUsers);
+    } catch (error) {
+      // Тихая ошибка
     }
   }, [currentGroup]);
 
@@ -488,16 +479,8 @@ export const App = () => {
     setIsLoading(true);
     
     try {
-      // Параллельно выполняем запросы
-      const [users, stats] = await Promise.all([
-        api.getUsers(),
-        api.getStationsStats(selectedCity)
-      ]);
-      
-      // Обновляем статистику
-      if (stats) {
-        setStationsData(stats);
-      }
+      // Получаем пользователей
+      const users = await api.getUsers();
       
       // Поиск по deviceId
       let existingUser = findUserByDeviceId(users, deviceId);
@@ -559,6 +542,11 @@ export const App = () => {
         [STORAGE_KEYS.CURRENT_SCREEN]: 'waiting'
       });
       
+      // Загружаем статистику в фоне
+      setTimeout(() => {
+        loadStationsMap(true);
+      }, 100);
+      
     } catch (error) {
       console.error('Registration error:', error);
     } finally {
@@ -600,23 +588,18 @@ export const App = () => {
     setIsLoading(true);
     
     try {
-      // Параллельно обновляем пользователя и загружаем участников
-      const [updateResult, members] = await Promise.all([
-        api.updateUser(userIdRef.current, {
-          station: currentSelectedStation,
-          wagon: wagonNumber,
-          color: clothingColor.trim(),
-          name: nickname.trim(),
-          is_waiting: false,
-          is_connected: true,
-          online: true,
-          last_seen: new Date().toISOString(),
-          status: `На станции: ${currentSelectedStation}`
-        }),
-        api.getStationUsers(currentSelectedStation)
-      ]);
-      
-      setGroupMembers(members);
+      // Фоновое обновление на сервере
+      api.updateUser(userIdRef.current, {
+        station: currentSelectedStation,
+        wagon: wagonNumber,
+        color: clothingColor.trim(),
+        name: nickname.trim(),
+        is_waiting: false,
+        is_connected: true,
+        online: true,
+        last_seen: new Date().toISOString(),
+        status: `На станции: ${currentSelectedStation}`
+      }).catch(() => {});
       
       // Сохраняем в storage
       saveMultipleToStorage({
@@ -625,6 +608,11 @@ export const App = () => {
         [STORAGE_KEYS.CLOTHING_COLOR]: clothingColor.trim(),
         [STORAGE_KEYS.WAGON_NUMBER]: wagonNumber
       });
+      
+      // Загружаем участников в фоне
+      setTimeout(() => {
+        loadGroupMembers(currentSelectedStation);
+      }, 200);
       
       // Обновляем статистику в фоне
       setTimeout(() => {
