@@ -1,3 +1,4 @@
+// app.jsx
 import { useState, useEffect, useRef, useCallback } from 'react';
 import bridge from '@vkontakte/vk-bridge';
 import './App.css';
@@ -19,8 +20,11 @@ const STORAGE_KEYS = {
   SESSION_ID: 'metro_session_id'
 };
 
-// Кэш VKStorage в памяти
+// Быстрый кэш в памяти
 let storageCache = {};
+let usersCache = null;
+let usersCacheTime = 0;
+const USERS_CACHE_TTL = 2000; // 2 секунды
 
 // Быстрая загрузка из VKStorage
 const loadFromVKStorage = async (keys) => {
@@ -38,11 +42,9 @@ const loadFromVKStorage = async (keys) => {
       }
     }
     
-    // Обновляем кэш
     storageCache = { ...storageCache, ...data };
     return data;
-  } catch (error) {
-    // Fallback на localStorage
+  } catch {
     const data = {};
     for (const key of keys) {
       const value = localStorage.getItem(key);
@@ -59,14 +61,13 @@ const loadFromVKStorage = async (keys) => {
   }
 };
 
-// Быстрое сохранение в VKStorage
+// Быстрое сохранение
 const saveToVKStorage = async (key, value) => {
   try {
     const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
     await bridge.send('VKWebAppStorageSet', { key, value: stringValue });
     storageCache[key] = value;
-  } catch (error) {
-    // Fallback на localStorage
+  } catch {
     localStorage.setItem(key, stringValue);
     storageCache[key] = value;
   }
@@ -81,15 +82,12 @@ const saveMultipleToStorage = async (data) => {
   await Promise.all(promises);
 };
 
-// Генерация deviceId (синхронно для скорости)
+// Генерация deviceId (синхронно)
 const generateDeviceId = () => {
   let deviceId = storageCache[STORAGE_KEYS.DEVICE_ID] || localStorage.getItem(STORAGE_KEYS.DEVICE_ID);
   
   if (!deviceId) {
-    const timestamp = Date.now();
-    const randomStr = Math.random().toString(36).substr(2, 8);
-    deviceId = `metro_${timestamp}_${randomStr}`;
-    // Сохраним асинхронно позже
+    deviceId = `metro_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
     setTimeout(() => saveToVKStorage(STORAGE_KEYS.DEVICE_ID, deviceId), 100);
   }
   
@@ -97,118 +95,54 @@ const generateDeviceId = () => {
 };
 
 // Генерация сессии
-const generateSessionId = (deviceId) => {
-  return `s_${deviceId}_${Date.now()}`;
-};
+const generateSessionId = (deviceId) => `s_${deviceId}_${Date.now()}`;
 
-// Быстрый поиск пользователя по deviceId
+// Оптимизированный поиск пользователя (O(n) но с ранним выходом)
 const findUserByDeviceId = (users, deviceId) => {
   for (let i = 0; i < users.length; i++) {
-    if (users[i].device_id === deviceId && users[i].online === true) {
+    if (users[i].device_id === deviceId) {
       return users[i];
     }
   }
   return null;
 };
 
-// Вычисление статистики станций
-const calculateStationsStats = (users, city) => {
-  const stationStats = {};
-  let total_connected = 0;
-  let total_waiting = 0;
-  
-  const cityStations = helpers.stations[city] || [];
-  
-  // Быстрая инициализация
-  for (let i = 0; i < cityStations.length; i++) {
-    stationStats[cityStations[i]] = {
-      station: cityStations[i],
-      waiting: 0,
-      connected: 0,
-      totalUsers: 0
-    };
-  }
-  
-  // Быстрый подсчет
-  for (let i = 0; i < users.length; i++) {
-    const user = users[i];
-    if (!user.online) continue;
-    
-    if (user.is_waiting && !user.is_connected) {
-      total_waiting++;
-    } else if (user.is_connected && user.station) {
-      total_connected++;
-      if (stationStats[user.station]) {
-        stationStats[user.station].connected++;
-        stationStats[user.station].totalUsers++;
-      }
-    }
-  }
-  
-  return {
-    stationStats: Object.values(stationStats),
-    totalStats: {
-      total_connected,
-      total_waiting,
-      total_users: total_connected + total_waiting
-    }
-  };
-};
-
 export const App = () => {
-  // Основные состояния с мгновенной загрузкой из кэша
+  // Состояния с мгновенной загрузкой из кэша
   const [currentScreen, setCurrentScreen] = useState(() => {
-    return storageCache[STORAGE_KEYS.CURRENT_SCREEN] || 
-           localStorage.getItem(STORAGE_KEYS.CURRENT_SCREEN) || 
-           'setup';
+    return storageCache[STORAGE_KEYS.CURRENT_SCREEN] || 'setup';
   });
   
   const [selectedCity, setSelectedCity] = useState(() => {
-    return storageCache[STORAGE_KEYS.CITY] || 
-           localStorage.getItem(STORAGE_KEYS.CITY) || 
-           'spb';
+    return storageCache[STORAGE_KEYS.CITY] || 'spb';
   });
   
   const [selectedGender, setSelectedGender] = useState(() => {
-    return storageCache[STORAGE_KEYS.GENDER] || 
-           localStorage.getItem(STORAGE_KEYS.GENDER) || 
-           'male';
+    return storageCache[STORAGE_KEYS.GENDER] || 'male';
   });
   
   const [selectedPosition, setSelectedPosition] = useState(() => {
-    return storageCache[STORAGE_KEYS.POSITION] || 
-           localStorage.getItem(STORAGE_KEYS.POSITION) || 
-           '';
+    return storageCache[STORAGE_KEYS.POSITION] || '';
   });
   
   const [selectedMood, setSelectedMood] = useState(() => {
-    return storageCache[STORAGE_KEYS.MOOD] || 
-           localStorage.getItem(STORAGE_KEYS.MOOD) || 
-           '';
+    return storageCache[STORAGE_KEYS.MOOD] || '';
   });
   
   const [wagonNumber, setWagonNumber] = useState(() => {
-    return storageCache[STORAGE_KEYS.WAGON_NUMBER] || 
-           localStorage.getItem(STORAGE_KEYS.WAGON_NUMBER) || 
-           '';
+    return storageCache[STORAGE_KEYS.WAGON_NUMBER] || '';
   });
   
   const [clothingColor, setClothingColor] = useState(() => {
-    return storageCache[STORAGE_KEYS.CLOTHING_COLOR] || 
-           localStorage.getItem(STORAGE_KEYS.CLOTHING_COLOR) || 
-           '';
+    return storageCache[STORAGE_KEYS.CLOTHING_COLOR] || '';
   });
   
   const [nickname, setNickname] = useState(() => {
-    return storageCache[STORAGE_KEYS.NICKNAME] || 
-           localStorage.getItem(STORAGE_KEYS.NICKNAME) || 
-           '';
+    return storageCache[STORAGE_KEYS.NICKNAME] || '';
   });
   
   const [currentSelectedStation, setCurrentSelectedStation] = useState(() => {
-    return storageCache[STORAGE_KEYS.SELECTED_STATION] || 
-           localStorage.getItem(STORAGE_KEYS.SELECTED_STATION) || 
-           null;
+    return storageCache[STORAGE_KEYS.SELECTED_STATION] || null;
   });
   
   const [currentGroup, setCurrentGroup] = useState(null);
@@ -220,130 +154,66 @@ export const App = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   const [deviceId, setDeviceId] = useState('');
-  const [nicknameError, setNicknameError] = useState(false);
-  const [clothingColorError, setClothingColorError] = useState(false);
-  const [stationError, setStationError] = useState(false);
-  const [isInitialized, setIsInitialized] = useState(false);
+  const [errors, setErrors] = useState({});
 
   // Refs
   const userIdRef = useRef(null);
   const sessionIdRef = useRef('');
   const vkUserIdRef = useRef(null);
-  const statsCacheRef = useRef(null);
   const pendingUpdatesRef = useRef({});
   const updateTimeoutRef = useRef(null);
+  const loadAttemptsRef = useRef(0);
 
-  // ==================== БЫСТРАЯ ЗАГРУЗКА ИЗ VKSTORAGE ====================
+  // ==================== БЫСТРАЯ ИНИЦИАЛИЗАЦИЯ ====================
   useEffect(() => {
-    const initFromVKStorage = async () => {
+    const init = async () => {
       try {
         // Загружаем все ключи одним запросом
         const keys = Object.values(STORAGE_KEYS);
         const data = await loadFromVKStorage(keys);
         
-        // Мгновенно применяем все загруженные значения
-        if (data[STORAGE_KEYS.USER_ID]) {
-          userIdRef.current = data[STORAGE_KEYS.USER_ID];
-        }
+        // Применяем все значения
+        if (data[STORAGE_KEYS.USER_ID]) userIdRef.current = data[STORAGE_KEYS.USER_ID];
+        if (data[STORAGE_KEYS.SESSION_ID]) sessionIdRef.current = data[STORAGE_KEYS.SESSION_ID];
         
-        if (data[STORAGE_KEYS.SESSION_ID]) {
-          sessionIdRef.current = data[STORAGE_KEYS.SESSION_ID];
-        }
+        // Получаем VK пользователя (параллельно)
+        bridge.send('VKWebAppGetUserInfo').then(user => {
+          vkUserIdRef.current = user.id;
+        }).catch(() => {});
         
-        // Устанавливаем состояния без ререндеров где возможно
-        if (data[STORAGE_KEYS.NICKNAME] && data[STORAGE_KEYS.NICKNAME] !== nickname) {
-          setNickname(data[STORAGE_KEYS.NICKNAME]);
-        }
+        // Загружаем статистику сразу
+        loadStationsMap(true);
         
-        if (data[STORAGE_KEYS.CITY] && data[STORAGE_KEYS.CITY] !== selectedCity) {
-          setSelectedCity(data[STORAGE_KEYS.CITY]);
-        }
-        
-        if (data[STORAGE_KEYS.GENDER] && data[STORAGE_KEYS.GENDER] !== selectedGender) {
-          setSelectedGender(data[STORAGE_KEYS.GENDER]);
-        }
-        
-        if (data[STORAGE_KEYS.CLOTHING_COLOR] && data[STORAGE_KEYS.CLOTHING_COLOR] !== clothingColor) {
-          setClothingColor(data[STORAGE_KEYS.CLOTHING_COLOR]);
-        }
-        
-        if (data[STORAGE_KEYS.WAGON_NUMBER] && data[STORAGE_KEYS.WAGON_NUMBER] !== wagonNumber) {
-          setWagonNumber(data[STORAGE_KEYS.WAGON_NUMBER]);
-        }
-        
-        if (data[STORAGE_KEYS.SELECTED_STATION] && data[STORAGE_KEYS.SELECTED_STATION] !== currentSelectedStation) {
-          setCurrentSelectedStation(data[STORAGE_KEYS.SELECTED_STATION]);
-        }
-        
-        if (data[STORAGE_KEYS.CURRENT_SCREEN] && data[STORAGE_KEYS.CURRENT_SCREEN] !== currentScreen) {
-          setCurrentScreen(data[STORAGE_KEYS.CURRENT_SCREEN]);
-        }
-        
-        if (data[STORAGE_KEYS.POSITION] && data[STORAGE_KEYS.POSITION] !== selectedPosition) {
-          setSelectedPosition(data[STORAGE_KEYS.POSITION]);
-        }
-        
-        if (data[STORAGE_KEYS.MOOD] && data[STORAGE_KEYS.MOOD] !== selectedMood) {
-          setSelectedMood(data[STORAGE_KEYS.MOOD]);
-        }
-        
-        // Если были на экране joined, восстанавливаем группу
+        // Если были на экране joined, восстанавливаем
         if (data[STORAGE_KEYS.CURRENT_SCREEN] === 'joined' && data[STORAGE_KEYS.SELECTED_STATION]) {
           setCurrentGroup({ station: data[STORAGE_KEYS.SELECTED_STATION], users: [] });
-          // Фоново загружаем участников
-          setTimeout(() => {
-            loadGroupMembers(data[STORAGE_KEYS.SELECTED_STATION]);
-          }, 200);
+          setTimeout(() => loadGroupMembers(data[STORAGE_KEYS.SELECTED_STATION]), 100);
         }
-        
-        // Получаем информацию о пользователе VK
-        try {
-          const user = await bridge.send('VKWebAppGetUserInfo');
-          vkUserIdRef.current = user.id;
-        } catch (e) {
-          // Игнорируем
-        }
-        
-        // Быстрая загрузка статистики
-        loadStationsMap();
-        
       } catch (error) {
-        console.warn('VKStorage init error:', error);
-      } finally {
-        setIsInitialized(true);
+        console.warn('Init error:', error);
       }
     };
     
-    // Генерируем deviceId синхронно
-    const devId = generateDeviceId();
-    setDeviceId(devId);
+    // Генерируем deviceId
+    setDeviceId(generateDeviceId());
     
-    // Инициализация VK Bridge
+    // Инициализация VK
     bridge.send("VKWebAppInit");
     
-    // Подписка на события VK
+    // Подписка на тему
     bridge.subscribe((event) => {
-      if (!event.detail) return;
-      
-      const { type, data } = event.detail;
-      if (type === 'VKWebAppUpdateConfig') {
+      if (event.detail?.type === 'VKWebAppUpdateConfig') {
         const schemeAttribute = document.createAttribute('scheme');
-        schemeAttribute.value = data.scheme ? data.scheme : 'client_light';
+        schemeAttribute.value = event.detail.data.scheme || 'client_light';
         document.body.attributes.setNamedItem(schemeAttribute);
       }
     });
     
-    // Загружаем данные из VKStorage
-    initFromVKStorage();
+    // Запускаем инициализацию
+    init();
     
-    // Обработчики онлайн/офлайн
-    const handleOnline = () => {
-      setIsOnline(true);
-      if (userIdRef.current) {
-        loadStationsMap(true);
-      }
-    };
-    
+    // Онлайн/офлайн
+    const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
     
     window.addEventListener('online', handleOnline);
@@ -353,112 +223,56 @@ export const App = () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
-  // ==================== СОХРАНЕНИЕ ИЗМЕНЕНИЙ В VKSTORAGE (debounced) ====================
+  // ==================== СОХРАНЕНИЕ (debounced) ====================
   useEffect(() => {
-    if (!isInitialized) return;
+    if (updateTimeoutRef.current) clearTimeout(updateTimeoutRef.current);
     
-    // Собираем все текущие значения
-    const updates = {
-      [STORAGE_KEYS.NICKNAME]: nickname,
-      [STORAGE_KEYS.CITY]: selectedCity,
-      [STORAGE_KEYS.GENDER]: selectedGender,
-      [STORAGE_KEYS.CLOTHING_COLOR]: clothingColor,
-      [STORAGE_KEYS.WAGON_NUMBER]: wagonNumber,
-      [STORAGE_KEYS.CURRENT_SCREEN]: currentScreen,
-      [STORAGE_KEYS.POSITION]: selectedPosition,
-      [STORAGE_KEYS.MOOD]: selectedMood,
-      [STORAGE_KEYS.DEVICE_ID]: deviceId
-    };
-    
-    if (currentSelectedStation) {
-      updates[STORAGE_KEYS.SELECTED_STATION] = currentSelectedStation;
-    }
-    
-    if (userIdRef.current) {
-      updates[STORAGE_KEYS.USER_ID] = userIdRef.current;
-    }
-    
-    if (sessionIdRef.current) {
-      updates[STORAGE_KEYS.SESSION_ID] = sessionIdRef.current;
-    }
-    
-    // Отменяем предыдущий таймаут
-    if (updateTimeoutRef.current) {
-      clearTimeout(updateTimeoutRef.current);
-    }
-    
-    // Устанавливаем новый таймаут для сохранения
     updateTimeoutRef.current = setTimeout(() => {
+      const updates = {
+        [STORAGE_KEYS.NICKNAME]: nickname,
+        [STORAGE_KEYS.CITY]: selectedCity,
+        [STORAGE_KEYS.GENDER]: selectedGender,
+        [STORAGE_KEYS.CLOTHING_COLOR]: clothingColor,
+        [STORAGE_KEYS.WAGON_NUMBER]: wagonNumber,
+        [STORAGE_KEYS.CURRENT_SCREEN]: currentScreen,
+        [STORAGE_KEYS.POSITION]: selectedPosition,
+        [STORAGE_KEYS.MOOD]: selectedMood,
+        [STORAGE_KEYS.DEVICE_ID]: deviceId
+      };
+      
+      if (currentSelectedStation) updates[STORAGE_KEYS.SELECTED_STATION] = currentSelectedStation;
+      if (userIdRef.current) updates[STORAGE_KEYS.USER_ID] = userIdRef.current;
+      if (sessionIdRef.current) updates[STORAGE_KEYS.SESSION_ID] = sessionIdRef.current;
+      
       saveMultipleToStorage(updates);
-    }, 300); // Сохраняем через 300мс после последнего изменения
+    }, 300);
     
-    return () => {
-      if (updateTimeoutRef.current) {
-        clearTimeout(updateTimeoutRef.current);
-      }
-    };
-  }, [
-    nickname, selectedCity, selectedGender, clothingColor,
-    wagonNumber, currentScreen, selectedPosition, selectedMood,
-    deviceId, currentSelectedStation, isInitialized
-  ]);
+    return () => clearTimeout(updateTimeoutRef.current);
+  }, [nickname, selectedCity, selectedGender, clothingColor, wagonNumber, currentScreen, selectedPosition, selectedMood, deviceId, currentSelectedStation]);
 
   // ==================== БЫСТРАЯ ЗАГРУЗКА СТАТИСТИКИ ====================
   const loadStationsMap = useCallback(async (force = false) => {
-    // Используем кэш если данные свежие (менее 10 секунд)
-    if (!force && statsCacheRef.current && (Date.now() - statsCacheRef.current.timestamp < 10000)) {
-      setStationsData(statsCacheRef.current.data);
-      return statsCacheRef.current.data;
-    }
-    
     try {
-      const users = await api.getUsers();
-      const stats = calculateStationsStats(users, selectedCity);
-      
-      // Сохраняем в кэш с временной меткой
-      statsCacheRef.current = {
-        data: stats,
-        timestamp: Date.now()
-      };
-      
-      setStationsData(stats);
-      return stats;
+      const stats = await api.getStationsStats(selectedCity, force);
+      if (stats) setStationsData(stats);
     } catch (error) {
-      if (statsCacheRef.current) {
-        setStationsData(statsCacheRef.current.data);
-        return statsCacheRef.current.data;
-      }
-      return null;
+      console.warn('Load stats error:', error);
     }
   }, [selectedCity]);
 
-  // ==================== ЗАГРУЗКА УЧАСТНИКОВ ГРУППЫ ====================
+  // ==================== ЗАГРУЗКА УЧАСТНИКОВ ====================
   const loadGroupMembers = useCallback(async (station = null) => {
-    const targetStation = station || (currentGroup ? currentGroup.station : null);
-    if (!targetStation) {
-      setGroupMembers([]);
-      return;
-    }
+    const targetStation = station || currentGroup?.station;
+    if (!targetStation) return;
     
     try {
-      const users = await api.getUsers();
-      const groupUsers = [];
-      
-      // Оптимизированный цикл
-      for (let i = 0; i < users.length; i++) {
-        const user = users[i];
-        if (user.station === targetStation && 
-            user.is_connected === true &&
-            user.online === true) {
-          groupUsers.push(user);
-        }
-      }
-      
-      setGroupMembers(groupUsers);
+      // Используем новый оптимизированный endpoint
+      const users = await api.getStationUsers(targetStation);
+      setGroupMembers(users);
     } catch (error) {
-      // Тихая ошибка
+      console.warn('Load members error:', error);
     }
   }, [currentGroup]);
 
@@ -466,85 +280,66 @@ export const App = () => {
   const handleEnterWaitingRoom = async () => {
     const trimmedNickname = nickname.trim();
     if (!trimmedNickname) {
-      setNicknameError(true);
-      bridge.send("VKWebAppShowSnackbar", {
-        text: '❌ Пожалуйста, введите ваш никнейм'
-      });
+      setErrors({ nickname: true });
+      bridge.send("VKWebAppShowSnackbar", { text: '❌ Введите никнейм' });
       return;
     }
     
-    // МГНОВЕННО переключаем экран (до завершения API запросов)
+    // МГНОВЕННО переключаем экран
     setCurrentScreen('waiting');
     setIsLoading(true);
     
     try {
-      // Получаем пользователей
-      const users = await api.getUsers();
+      // Параллельные запросы
+      const [users, stats] = await Promise.all([
+        api.getUsers(),
+        api.getStationsStats(selectedCity)
+      ]);
       
-      // Поиск по deviceId
-      let existingUser = findUserByDeviceId(users, deviceId);
+      if (stats) setStationsData(stats);
       
+      const existingUser = findUserByDeviceId(users, deviceId);
       const newSessionId = generateSessionId(deviceId);
       sessionIdRef.current = newSessionId;
       
       if (existingUser) {
-        // Обновляем существующую сессию
         userIdRef.current = existingUser.id;
-        
-        // Фоновое обновление (не ждем)
+        // Обновляем в фоне
         api.updateUser(existingUser.id, {
           name: trimmedNickname,
           city: selectedCity,
           gender: selectedGender,
           session_id: newSessionId,
-          device_id: deviceId,
-          vk_user_id: vkUserIdRef.current,
           online: true,
           is_waiting: true,
           is_connected: false,
-          last_seen: new Date().toISOString(),
-          status: 'В режиме ожидания'
+          last_seen: new Date().toISOString()
         }).catch(() => {});
       } else {
-        // Создаем нового пользователя
+        // Создаем нового
         const userData = {
           name: trimmedNickname,
-          station: '',
-          wagon: '',
-          color: '',
-          colorCode: helpers.getRandomColor(),
-          status: 'В режиме ожидания',
-          online: true,
           city: selectedCity,
           gender: selectedGender,
-          position: '',
-          mood: '',
-          is_waiting: true,
-          is_connected: false,
           session_id: newSessionId,
           device_id: deviceId,
           vk_user_id: vkUserIdRef.current,
+          online: true,
+          is_waiting: true,
+          is_connected: false,
           last_seen: new Date().toISOString()
         };
-
+        
         const createdUser = await api.createUser(userData);
-        if (createdUser?.id) {
-          userIdRef.current = createdUser.id;
-        }
+        if (createdUser?.id) userIdRef.current = createdUser.id;
       }
       
-      // Сохраняем в storage
       saveMultipleToStorage({
         [STORAGE_KEYS.USER_ID]: userIdRef.current,
         [STORAGE_KEYS.SESSION_ID]: newSessionId,
         [STORAGE_KEYS.NICKNAME]: trimmedNickname,
         [STORAGE_KEYS.CURRENT_SCREEN]: 'waiting'
       });
-      
-      // Загружаем статистику в фоне
-      setTimeout(() => {
-        loadStationsMap(true);
-      }, 100);
       
     } catch (error) {
       console.error('Registration error:', error);
@@ -553,54 +348,47 @@ export const App = () => {
     }
   };
 
-  // ==================== ПОДТВЕРЖДЕНИЕ ВЫБОРА СТАНЦИИ (МГНОВЕННЫЙ) ====================
+  // ==================== ПОДТВЕРЖДЕНИЕ СТАНЦИИ (МГНОВЕННЫЙ) ====================
   const handleConfirmStation = async () => {
     if (!clothingColor.trim()) {
-      setClothingColorError(true);
-      bridge.send("VKWebAppShowSnackbar", {
-        text: '❌ Укажите цвет одежды'
-      });
+      setErrors({ clothingColor: true });
+      bridge.send("VKWebAppShowSnackbar", { text: '❌ Укажите цвет одежды' });
       return;
     }
     
     if (!currentSelectedStation) {
-      setStationError(true);
-      bridge.send("VKWebAppShowSnackbar", {
-        text: '❌ Выберите станцию'
-      });
+      setErrors({ station: true });
+      bridge.send("VKWebAppShowSnackbar", { text: '❌ Выберите станцию' });
       return;
     }
 
     if (!userIdRef.current) {
-      bridge.send("VKWebAppShowSnackbar", {
-        text: '❌ Сначала создайте профиль'
-      });
+      bridge.send("VKWebAppShowSnackbar", { text: '❌ Сначала создайте профиль' });
       return;
     }
 
     // МГНОВЕННО обновляем UI
-    setCurrentGroup({
-      station: currentSelectedStation,
-      users: []
-    });
+    setCurrentGroup({ station: currentSelectedStation, users: [] });
     setCurrentScreen('joined');
     setIsLoading(true);
     
     try {
-      // Фоновое обновление на сервере
-      api.updateUser(userIdRef.current, {
-        station: currentSelectedStation,
-        wagon: wagonNumber,
-        color: clothingColor.trim(),
-        name: nickname.trim(),
-        is_waiting: false,
-        is_connected: true,
-        online: true,
-        last_seen: new Date().toISOString(),
-        status: `На станции: ${currentSelectedStation}`
-      }).catch(() => {});
+      // Параллельные запросы
+      const [updateResult, members] = await Promise.all([
+        api.updateUser(userIdRef.current, {
+          station: currentSelectedStation,
+          wagon: wagonNumber,
+          color: clothingColor.trim(),
+          is_waiting: false,
+          is_connected: true,
+          online: true,
+          last_seen: new Date().toISOString()
+        }),
+        api.getStationUsers(currentSelectedStation)
+      ]);
       
-      // Сохраняем в storage
+      setGroupMembers(members);
+      
       saveMultipleToStorage({
         [STORAGE_KEYS.CURRENT_SCREEN]: 'joined',
         [STORAGE_KEYS.SELECTED_STATION]: currentSelectedStation,
@@ -608,18 +396,11 @@ export const App = () => {
         [STORAGE_KEYS.WAGON_NUMBER]: wagonNumber
       });
       
-      // Загружаем участников в фоне
-      setTimeout(() => {
-        loadGroupMembers(currentSelectedStation);
-      }, 200);
-      
       // Обновляем статистику в фоне
-      setTimeout(() => {
-        loadStationsMap(true);
-      }, 300);
+      loadStationsMap(true);
       
     } catch (error) {
-      console.error('Join station error:', error);
+      console.error('Join error:', error);
     } finally {
       setIsLoading(false);
     }
@@ -628,31 +409,23 @@ export const App = () => {
   // ==================== ВЫХОД ИЗ ГРУППЫ ====================
   const handleLeaveGroup = async () => {
     if (userIdRef.current) {
-      // Фоновое обновление
       api.updateUser(userIdRef.current, { 
         is_waiting: true,
         is_connected: false,
         station: '',
-        status: 'В режиме ожидания',
         last_seen: new Date().toISOString()
       }).catch(() => {});
     }
     
-    // Мгновенное обновление UI
     setCurrentGroup(null);
     setCurrentScreen('waiting');
     setSelectedPosition('');
     setSelectedMood('');
     
-    // Сохраняем в storage
     saveMultipleToStorage({
       [STORAGE_KEYS.CURRENT_SCREEN]: 'waiting',
       [STORAGE_KEYS.POSITION]: '',
       [STORAGE_KEYS.MOOD]: ''
-    });
-    
-    bridge.send("VKWebAppShowSnackbar", {
-      text: 'Вы вышли из комнаты станции'
     });
   };
 
@@ -673,109 +446,61 @@ export const App = () => {
       )
     );
     
-    // Фоновое обновление на сервере
-    try {
-      await api.updateUser(userIdRef.current, { 
-        status,
-        position: selectedPosition,
-        mood: selectedMood,
-        last_seen: new Date().toISOString()
-      });
-    } catch (error) {
-      // Тихая ошибка
-    }
+    // Фоновое обновление
+    api.updateUser(userIdRef.current, { 
+      status,
+      position: selectedPosition,
+      mood: selectedMood,
+      last_seen: new Date().toISOString()
+    }).catch(() => {});
   }, [selectedPosition, selectedMood]);
 
-  // Автоматическое обновление группы
+  // Автообновление
   useEffect(() => {
-    let interval;
-    
     if (currentScreen === 'joined' && currentGroup) {
       loadGroupMembers(currentGroup.station);
-      interval = setInterval(() => {
-        loadGroupMembers(currentGroup.station);
-      }, 15000); // Каждые 15 секунд
+      const interval = setInterval(() => loadGroupMembers(currentGroup.station), 10000);
+      return () => clearInterval(interval);
     }
-    
-    return () => {
-      if (interval) clearInterval(interval);
-    };
   }, [currentScreen, currentGroup, loadGroupMembers]);
 
-  // Дебаунс обновления состояния
   useEffect(() => {
-    const timer = setTimeout(() => {
-      if (userIdRef.current && (selectedPosition || selectedMood)) {
-        updateUserState();
-      }
-    }, 300);
-    
+    const timer = setTimeout(updateUserState, 300);
     return () => clearTimeout(timer);
   }, [selectedPosition, selectedMood, updateUserState]);
 
-  // Периодическое обновление статистики
   useEffect(() => {
     if (currentScreen === 'waiting' || currentScreen === 'joined') {
-      const interval = setInterval(() => {
-        loadStationsMap();
-      }, 20000); // Каждые 20 секунд
-      
+      const interval = setInterval(() => loadStationsMap(), 15000);
       return () => clearInterval(interval);
     }
   }, [currentScreen, loadStationsMap]);
 
-  // ==================== РЕНДЕР КАРТЫ СТАНЦИЙ ====================
+  // ==================== РЕНДЕР КАРТЫ ====================
   const renderStationsMap = () => {
     const { stationStats } = stationsData;
-    
-    if (stationStats.length === 0) {
-      return (
-        <div className="loading" style={{ textAlign: 'center', padding: '20px' }}>
-          <div>Загрузка карты станций...</div>
-        </div>
-      );
-    }
-    
     const cityStations = helpers.stations[selectedCity] || [];
     
     return cityStations.map(stationName => {
       const stationData = stationStats.find(s => s.station === stationName);
-      let waitingCount = 0;
-      let connectedCount = 0;
-      let stationClass = 'empty';
-      
-      if (stationData) {
-        waitingCount = stationData.waiting || 0;
-        connectedCount = stationData.connected || 0;
-        
-        if (connectedCount > 0) {
-          stationClass = 'connected';
-        } else if (waitingCount > 0) {
-          stationClass = 'waiting';
-        }
-      }
-      
       const isSelected = currentSelectedStation === stationName;
       
       return (
         <div 
           key={stationName}
-          className={`station-map-item ${stationClass} ${isSelected ? 'selected' : ''}`}
+          className={`station-map-item ${stationData?.connected ? 'connected' : stationData?.waiting ? 'waiting' : 'empty'} ${isSelected ? 'selected' : ''}`}
           onClick={() => {
             setCurrentSelectedStation(stationName);
-            setStationError(false);
+            setErrors({ station: false });
           }}
         >
           <div className="station-name">{stationName}</div>
           <div className="station-counts">
-            {waitingCount > 0 && (
-              <span className="station-count count-waiting">{waitingCount}⏳</span>
+            {stationData?.waiting > 0 && (
+              <span className="count-waiting">{stationData.waiting}⏳</span>
             )}
-            {connectedCount > 0 && (
-              <span className="station-count count-connected">{connectedCount}✅</span>
-            )}
-            {waitingCount === 0 && connectedCount === 0 && (
-              <span style={{fontSize: '10px', color: '#666'}}>Пусто</span>
+            {stationData?.connected > 0 && (
+              <span className="count-connected">{stationData.connected}✅</span>
             )}
           </div>
         </div>
@@ -783,7 +508,7 @@ export const App = () => {
     });
   };
 
-  // ==================== РЕНДЕР УЧАСТНИКОВ ГРУППЫ ====================
+  // ==================== РЕНДЕР УЧАСТНИКОВ ====================
   const renderGroupMembers = () => {
     if (groupMembers.length === 0) {
       return <div className="no-requests">Нет участников на этой станции</div>;
@@ -799,7 +524,7 @@ export const App = () => {
           </div>
           <div className="user-state-info">
             <div className="user-state-name">
-              {user.name} {isCurrentUser && <span style={{color: '#007bff'}}>(Вы)</span>}
+              {user.name} {isCurrentUser && '(Вы)'}
             </div>
             <div className="user-state-details">
               {(user.position || user.mood) && (
@@ -828,17 +553,13 @@ export const App = () => {
   return (
     <div className="app-container">
       {!isOnline && (
-        <div className="offline-indicator">
-          ⚠️ Отсутствует соединение с интернетом
-        </div>
+        <div className="offline-indicator">⚠️ Нет соединения</div>
       )}
       
       {isLoading && (
         <div className="loader-card">
-          <div className="loader-1">
-            <div className="neuromorphic-circle"></div>
-          </div>
-          <div style={{textAlign: 'center', marginTop: '10px'}}>Загрузка...</div>
+          <div className="loader-1"><div className="neuromorphic-circle"></div></div>
+          <div>Загрузка...</div>
         </div>
       )}
       
@@ -849,198 +570,120 @@ export const App = () => {
               <h1>Метрос</h1>
               <div className="subtitle">Встречай попутчика🚉✔</div>
             </div>
-            <div className="header-icons">
-              <div className="metro-icon">🚇</div>
-            </div>
+            <div className="header-icons"><div className="metro-icon">🚇</div></div>
           </div>
         </header>
         
         <div className="content">
-          {/* ЭКРАН НАСТРОЙКИ ПРОФИЛЯ */}
+          {/* ЭКРАН НАСТРОЙКИ */}
           {currentScreen === 'setup' && (
-            <div id="setup-screen" className="screen active">
+            <div className="screen">
               <h2>Настройка профиля</h2>
               
               <div className="form-group">
-                <label htmlFor="nickname-input" style={{ color: nicknameError ? '#ff4444' : '' }}>
-                  Укажите Ваш никнейм *
-                  {nicknameError && (
-                    <span style={{ color: '#ff4444', marginLeft: '5px', fontSize: '12px' }}>
-                      (обязательное поле)
-                    </span>
-                  )}
-                </label>
+                <label>Никнейм *</label>
                 <input 
                   type="text" 
-                  id="nickname-input" 
                   placeholder="Придумайте уникальное имя" 
                   value={nickname}
                   onChange={(e) => {
                     setNickname(e.target.value);
-                    setNicknameError(false);
+                    setErrors({ nickname: false });
                   }}
-                  className={nicknameError ? 'error-input' : ''}
-                  required 
+                  className={errors.nickname ? 'error-input' : ''}
                 />
-                {nicknameError && (
-                  <small className="field-hint" style={{ color: '#ff4444' }}>
-                    ❌ Это поле обязательно для заполнения
-                  </small>
-                )}
               </div>
               
               <div className="form-group">
-                <label>Выберите город:</label>
+                <label>Город:</label>
                 <div className="city-options">
-                  <div 
-                    className={`city-option moscow ${selectedCity === 'moscow' ? 'active' : ''}`}
-                    onClick={() => setSelectedCity('moscow')}
-                  >
+                  <div className={`city-option moscow ${selectedCity === 'moscow' ? 'active' : ''}`} onClick={() => setSelectedCity('moscow')}>
                     <div className="city-name">Москва</div>
-                    <div className="city-description">Московский метрополитен</div>
                   </div>
-                  <div 
-                    className={`city-option spb ${selectedCity === 'spb' ? 'active' : ''}`}
-                    onClick={() => setSelectedCity('spb')}
-                  >
+                  <div className={`city-option spb ${selectedCity === 'spb' ? 'active' : ''}`} onClick={() => setSelectedCity('spb')}>
                     <div className="city-name">Санкт-Петербург</div>
-                    <div className="city-description">Петербургский метрополитен</div>
                   </div>
                 </div>
               </div>
               
               <div className="form-group">
-                <label>Ваш пол:</label>
+                <label>Пол:</label>
                 <div className="gender-options">
-                  <div 
-                    className={`gender-option ${selectedGender === 'male' ? 'active' : ''}`}
-                    onClick={() => setSelectedGender('male')}
-                  >
-                    Мужской
-                  </div>
-                  <div 
-                    className={`gender-option ${selectedGender === 'female' ? 'active' : ''}`}
-                    onClick={() => setSelectedGender('female')}
-                  >
-                    Женский
-                  </div>
+                  <div className={`gender-option ${selectedGender === 'male' ? 'active' : ''}`} onClick={() => setSelectedGender('male')}>Мужской</div>
+                  <div className={`gender-option ${selectedGender === 'female' ? 'active' : ''}`} onClick={() => setSelectedGender('female')}>Женский</div>
                 </div>
               </div>
               
-              <button 
-                type="button" 
-                className="btn" 
-                onClick={handleEnterWaitingRoom}
-                disabled={isLoading}
-              >
-                {isLoading ? 'Создание профиля...' : 'Войти в комнату ожидания'}
+              <button className="btn" onClick={handleEnterWaitingRoom} disabled={isLoading}>
+                {isLoading ? 'Загрузка...' : 'Войти в комнату ожидания'}
               </button>
             </div>
           )}
 
-          {/* ЭКРАН КОМНАТЫ ОЖИДАНИЯ */}
+          {/* ЭКРАН ОЖИДАНИЯ */}
           {currentScreen === 'waiting' && (
-            <div id="waiting-room-screen" className="screen">
-              <button className="back-btn" onClick={() => setCurrentScreen('setup')}>
-                <i>←</i> Изменить параметры
-              </button>
+            <div className="screen">
+              <button className="back-btn" onClick={() => setCurrentScreen('setup')}>← Изменить параметры</button>
               
               <h2>Комната ожидания</h2>
               
               <div className="stations-map-container">
-                <h3>🗺️ Карта станций метро</h3>
+                <h3>🗺️ Карта станций</h3>
                 
                 <div className="map-legend">
-                  <div className="legend-item">
-                    <div className="legend-color connected"></div>
-                    <span>Выбрали станцию: {stationsData.totalStats?.total_connected || 0}</span>
-                  </div>
-                  <div className="legend-item">
-                    <div className="legend-color waiting"></div>
-                    <span>В режиме ожидания: {stationsData.totalStats?.total_waiting || 0}</span>
-                  </div>
+                  <div className="legend-item"><div className="legend-color connected"></div><span>Выбрали станцию: {stationsData.totalStats?.total_connected || 0}</span></div>
+                  <div className="legend-item"><div className="legend-color waiting"></div><span>В ожидании: {stationsData.totalStats?.total_waiting || 0}</span></div>
                 </div>
                 
-                <div className="metro-map">
-                  {renderStationsMap()}
-                </div>
+                <div className="metro-map">{renderStationsMap()}</div>
               </div>
 
               <div className="user-settings-panel">
                 <h4>Ваши параметры</h4>
                 
                 <div className="form-group">
-                  <label htmlFor="wagon-select">Номер вагона (необязательно)</label>
-                  <select 
-                    id="wagon-select" 
-                    value={wagonNumber}
-                    onChange={(e) => setWagonNumber(e.target.value)}
-                  >
+                  <label>Номер вагона</label>
+                  <select value={wagonNumber} onChange={(e) => setWagonNumber(e.target.value)}>
                     <option value="">Не указывать</option>
-                    {[1, 2, 3, 4, 5, 6, 7, 8].map(num => (
-                      <option key={num} value={num.toString()}>{num}</option>
-                    ))}
+                    {[1,2,3,4,5,6,7,8].map(num => <option key={num} value={num}>{num}</option>)}
                   </select>
                 </div>
                 
                 <div className="form-group">
-                  <label htmlFor="color-select" style={{ color: clothingColorError ? '#ff4444' : '' }}>
-                    Цвет верхней одежды или стиль *
-                  </label>
+                  <label>Цвет одежды *</label>
                   <input 
                     type="text" 
-                    id="color-select" 
                     placeholder="Например: черный верх, синий низ" 
                     value={clothingColor}
                     onChange={(e) => {
                       setClothingColor(e.target.value);
-                      setClothingColorError(false);
+                      setErrors({ clothingColor: false });
                     }}
-                    className={clothingColorError ? 'error-input' : ''}
-                    required 
+                    className={errors.clothingColor ? 'error-input' : ''}
                   />
-                  {clothingColorError && (
-                    <small className="field-hint" style={{ color: '#ff4444' }}>
-                      ❌ Это поле обязательно для заполнения
-                    </small>
-                  )}
                 </div>
                 
-                <button 
-                  className="btn btn-success" 
-                  onClick={handleConfirmStation}
-                  disabled={isLoading}
-                >
-                  {isLoading ? 'Присоединение...' : 'Подтвердить параметры и присоединиться'}
+                <button className="btn btn-success" onClick={handleConfirmStation} disabled={isLoading}>
+                  {isLoading ? 'Присоединение...' : 'Подтвердить и присоединиться'}
                 </button>
               </div>
             </div>
           )}
 
-          {/* ЭКРАН ПРИСОЕДИНЕНИЯ К СТАНЦИИ */}
+          {/* ЭКРАН ПРИСОЕДИНЕНИЯ */}
           {currentScreen === 'joined' && (
-            <div id="joined-room-screen" className="screen">
-              <button className="back-btn" onClick={handleLeaveGroup}>
-                <i>←</i> Вернуться к поиску
-              </button>
+            <div className="screen">
+              <button className="back-btn" onClick={handleLeaveGroup}>← Вернуться к поиску</button>
               
               <h2>Вы выбрали станцию {currentGroup?.station}</h2>
               
               <div className="status-indicators">
-                <div className="status-indicator">
-                  📍 Позиция: <span id="current-position">
-                    {selectedPosition || 'не выбрана'}
-                  </span>
-                </div>
-                <div className="status-indicator">
-                  😊 Настроение: <span id="current-mood">
-                    {selectedMood || 'не выбрано'}
-                  </span>
-                </div>
+                <div className="status-indicator">📍 Позиция: <span>{selectedPosition || 'не выбрана'}</span></div>
+                <div className="status-indicator">😊 Настроение: <span>{selectedMood || 'не выбрано'}</span></div>
               </div>
               
               <div className="state-section">
-                <h4>🎯 Ваша позиция на станции или в вагоне</h4>
+                <h4>🎯 Ваша позиция</h4>
                 <div className="state-cards">
                   {[
                     { position: "Брожу по станции", icon: "🚶" },
@@ -1051,15 +694,8 @@ export const App = () => {
                     { position: "Сижу по центру в вагоне", icon: "💺" },
                     { position: "Сижу у двери в вагоне", icon: "🪑" },
                     { position: "Сижу читаю в вагоне", icon: "📖" }
-                  ].map((item) => (
-                    <div 
-                      key={item.position}
-                      className={`state-card ${selectedPosition === item.position ? 'active' : ''}`}
-                      onClick={() => {
-                        setSelectedPosition(item.position);
-                        updateUserState();
-                      }}
-                    >
+                  ].map(item => (
+                    <div key={item.position} className={`state-card ${selectedPosition === item.position ? 'active' : ''}`} onClick={() => setSelectedPosition(item.position)}>
                       <div className="state-icon">{item.icon}</div>
                       <div className="state-name">{item.position}</div>
                     </div>
@@ -1068,7 +704,7 @@ export const App = () => {
               </div>
 
               <div className="state-section">
-                <h4>😊 Ваше текущее состояние</h4>
+                <h4>😊 Ваше состояние</h4>
                 <div className="state-cards">
                   {[
                     { mood: "Просто наблюдаю", icon: "👀" },
@@ -1077,15 +713,8 @@ export const App = () => {
                     { mood: "Плохое настроение", icon: "😔" },
                     { mood: "Жду когда подойдут", icon: "⏳" },
                     { mood: "Собираюсь подойти", icon: "🚶" }
-                  ].map((item) => (
-                    <div 
-                      key={item.mood}
-                      className={`state-card ${selectedMood === item.mood ? 'active' : ''}`}
-                      onClick={() => {
-                        setSelectedMood(item.mood);
-                        updateUserState();
-                      }}
-                    >
+                  ].map(item => (
+                    <div key={item.mood} className={`state-card ${selectedMood === item.mood ? 'active' : ''}`} onClick={() => setSelectedMood(item.mood)}>
                       <div className="state-icon">{item.icon}</div>
                       <div className="state-name">{item.mood}</div>
                     </div>
@@ -1095,21 +724,15 @@ export const App = () => {
 
               <div className="users-list-section">
                 <h3>👥 Участники на вашей станции</h3>
-                <div id="group-members">
-                  {renderGroupMembers()}
-                </div>
+                <div id="group-members">{renderGroupMembers()}</div>
               </div>
               
-              <button className="btn btn-danger" onClick={handleLeaveGroup}>
-                Покинуть группу
-              </button>
+              <button className="btn btn-danger" onClick={handleLeaveGroup}>Покинуть группу</button>
             </div>
           )}
         </div>
         
-        <footer>
-          &copy; 2026 | Метрос | Санкт-Петербург
-        </footer>
+        <footer>© 2026 | Метрос | Санкт-Петербург</footer>
       </div>
     </div>
   );
